@@ -1,0 +1,19 @@
+## Factor to implement
+Name:        <<name>>
+Type:        <<factor_type>>
+Description: <<description>>
+Levels:      <<levels>>
+Depends on:  <<depends_on>>
+
+## Available keys in each trial dict
+Observable factors:
+  participant_id : int
+  trial_index    : int
+  task           : "color_naming" | "word_reading"
+  color          : "red" | "blue" | "green"
+  word           : "red" | "blue" | "green"
+  correct        : 0 | 1
+
+<<discovered_section>>
+<<error_section>>
+Return ONLY a JSON object with keys "compute_factor_code" and "sweetpea_code".

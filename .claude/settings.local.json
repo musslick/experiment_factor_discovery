@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:sweetpea-org.github.io)",
+      "Bash(ls -la \"/Users/musslick/Documents/recovered files/Osnabrück/Projects/Experimental Design Search/\" && echo \"---\" && ls -la \"/Users/musslick/Documents/recovered files/Osnabrück/Projects/Experimental Design/\")",
+      "Bash(python3 -c \"import sweetpea; help\\(sweetpea.Factor\\)\")",
+      "Bash(ls \"/Users/musslick/anaconda3/lib/python3.7/site-packages/sweetpea/\")",
+      "Bash(find \"/Users/musslick/anaconda3\" -name \"anthropic\" -type d 2>/dev/null | head -5)",
+      "Read(//Users/musslick/anaconda3/envs/**)",
+      "Read(//Users/musslick/**)"
+    ]
+  }
+}

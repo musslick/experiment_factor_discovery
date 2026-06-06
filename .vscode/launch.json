@@ -1,0 +1,65 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Diagnose Synthesis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/diagnose_synthesis.py",
+            "args": ["--factor", "congruency"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Test LLM (smoke test)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_llm_test.py",
+            "args": ["--model", "claude-sonnet-4-6"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Test LLM (pytest suite)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["tests/test_llm_integration.py", "-v", "-m", "integration"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Run Benchmark",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_benchmark.py",
+            "args": ["--config", "config/stroop_benchmark.yaml"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Generate Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/generate_data.py",
+            "args": ["--config", "config/stroop_benchmark.yaml"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        }
+    ]
+}

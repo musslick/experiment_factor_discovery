@@ -1,0 +1,33 @@
+## Behavioural task
+This is a Stroop task. On each trial participants see a colour word (e.g. "red", "blue", "green") printed in coloured ink and must perform one of two tasks:
+  color_naming : report the ink colour (ignore the word meaning)
+  word_reading : report the word meaning (ignore the ink colour)
+The motor response is determined by the task: ink colour → response in color_naming; word meaning → response in word_reading.
+Accuracy (correct / incorrect) is the outcome to be predicted.
+
+## Observable design factors (available in every trial dict)
+<<observable_factors>>
+
+## Already-discovered factors (also available as trial dict keys)
+<<discovered_factors>>
+
+## Permanently banned factors (do NOT propose these)
+<<hard_rejected_factors>>
+
+## Cross-validation results — Iteration <<iteration>> of Round <<round_num>>
+All candidates evaluated so far this round, ranked best to worst by CV score.
+The score is mean per-participant log-likelihood improvement (higher = better).
+
+<<scored_candidates>>
+
+## Top performers — focus refinement on these
+<<top_candidates>>
+
+## Request
+Propose <<n_to_generate>> NEW or REFINED candidate derived factors that are not listed above.
+- Improve upon or create alternatives inspired by the top performers.
+- You may propose refined versions of lower-scoring candidates if you have a clear reason they could work better.
+- Do NOT reproduce any already-evaluated candidate exactly.
+- Do NOT propose any factor in the permanently banned list.
+
+Return ONLY a JSON array — no surrounding text.
