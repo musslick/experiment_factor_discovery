@@ -1,0 +1,78 @@
+benchmark:
+  name: "prospect_theory_factor_discovery"
+  type: "prospect_theory"
+
+data_generation:
+  n_participants: 100
+  n_blocks_per_participant: 200  # = n_trials_per_participant (1 trial per SweetPea block)
+  outcome_variable: "chose_left"
+  task_context: |
+    This is a prospect-theory risky-choice task. On each trial, two monetary
+    gambles are presented side-by-side (left and right). Each gamble has a gain
+    amount, a loss amount, and a gain probability; the loss probability is
+    implicitly 1 − gain_probability.
+    Participants choose which gamble they prefer. Choices depend only on the
+    design factors (gamble parameters); participant behaviour and received outcomes
+    are not modelled.
+    The outcome to be predicted is a binary choice: chose_left = 1 if the
+    participant selected the left gamble, 0 if they selected the right gamble.
+  base_factors:
+    - {name: left_gain,              dtype: continuous}
+    - {name: left_loss,              dtype: continuous}
+    - {name: left_gain_probability,  dtype: continuous}
+    - {name: right_gain,             dtype: continuous}
+    - {name: right_loss,             dtype: continuous}
+    - {name: right_gain_probability, dtype: continuous}
+  hidden_factors:
+    - "left_expected_value"
+    - "right_expected_value"
+    - "expected_value_difference"
+    - "gain_difference"
+    - "loss_difference"
+    - "probability_difference"
+    - "dominance_relation"
+    - "previous_expected_value_difference"
+    - "value_difference_transition"
+  logistic_model:
+    intercept: 0.0
+    terms:
+      - {factor: expected_value_difference,          coefficient:  0.8}
+      - {factor: loss_difference,                    coefficient: -0.4}
+      - {factor: probability_difference,             coefficient:  0.3}
+      - {factor: dominance_relation, level: left_dominates,  coefficient:  1.0}
+      - {factor: dominance_relation, level: right_dominates, coefficient: -1.0}
+      - {factor: value_difference_transition, level: switch,  coefficient: -0.2}
+
+discovery:
+  n_rounds: 5
+
+evaluation:
+  ground_truth_factors:
+    - name: "expected_value_difference"
+      type: "within_trial"
+      factor_class: "continuous"
+      levels: []
+    - name: "gain_difference"
+      type: "within_trial"
+      factor_class: "continuous"
+      levels: []
+    - name: "loss_difference"
+      type: "within_trial"
+      factor_class: "continuous"
+      levels: []
+    - name: "probability_difference"
+      type: "within_trial"
+      factor_class: "continuous"
+      levels: []
+    - name: "dominance_relation"
+      type: "within_trial"
+      factor_class: "discrete"
+      levels: ["left_dominates", "right_dominates", "no_dominance"]
+    - name: "previous_expected_value_difference"
+      type: "window"
+      factor_class: "continuous"
+      levels: []
+    - name: "value_difference_transition"
+      type: "window"
+      factor_class: "discrete"
+      levels: ["repeat", "switch"]
