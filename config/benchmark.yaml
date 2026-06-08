@@ -1,0 +1,123 @@
+# Top-level benchmark run configuration.
+# List the benchmark config files to include in this run (comment out to skip).
+# All sections below are shared defaults merged into every benchmark config.
+# A benchmark config may override any individual field by re-specifying it.
+#
+# Usage: python run_benchmark.py --config config/benchmark.yaml
+
+benchmarks:
+  # Synthetic benchmarks
+  # - config/synthetic_stroop_benchmark.yaml
+  # - config/synthetic_stroop_simon_benchmark.yaml
+  # - config/synthetic_rdk_task_switching_benchmark.yaml
+  # - config/synthetic_prospect_theory_benchmark.yaml
+  # Empirical benchmarks (can be mixed with synthetic)
+  - config/empirical_stroop_congruency.yaml
+
+# ── Shared globals ────────────────────────────────────────────────────────────
+benchmark:
+  seed: 42           # global RNG seed; controls data split, CV folds, and random strategies
+  output_dir: "results"
+
+# ── Discovery ─────────────────────────────────────────────────────────────────
+discovery:
+  # ── Round structure ────────────────────────────────────────────────────────
+  # Per-benchmark reference (set n_rounds and allowed_factor_classes to match
+  # the active benchmark; all other discovery params are benchmark-agnostic):
+  #   synthetic_stroop             : n_rounds=2, allowed_factor_classes=["discrete"]
+  #   synthetic_stroop_simon       : n_rounds=4, allowed_factor_classes=["discrete"]
+  #   synthetic_rdk_task_switching : n_rounds=4, allowed_factor_classes=["discrete", "continuous"]
+  #   synthetic_prospect_theory    : n_rounds=5, allowed_factor_classes=["discrete", "continuous"]
+  #   empirical_stroop_congruency  : n_rounds=2, allowed_factor_classes=["discrete"]
+  n_rounds: 2                    # how many sequential discovery rounds to run; each round
+                                 # attempts to discover one new factor
+  max_search_iterations: 3       # CV iterations per round (seeding counts as iteration 0;
+                                 # evolver runs max_search_iterations - 1 times)
+
+  # ── Predicate synthesis ────────────────────────────────────────────────────
+  max_synthesis_retries: 2       # max LLM retry attempts when synthesised predicate fails
+                                 # validation; each retry includes the previous error message
+  sandbox_timeout_seconds: 10    # max seconds a predicate may run before being killed
+  sandbox_backend: "subprocess"  # "subprocess" (default) or "docker" (requires llm-sandbox)
+  docker_image: "python:3.9-slim"# docker image used when sandbox_backend is "docker"
+
+  # ── Scoring / winner selection ─────────────────────────────────────────────
+  stability_weight: 1.0          # λ in adjusted_score = (mean − λ·se) / complexity;
+                                 # higher values penalise noisy candidates more strongly
+  complexity_exponent: 1.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
+                                 # continuous) in the complexity denominator; higher = stronger
+                                 # penalty for multi-level factors
+  depends_on_exponent: 0.5       # exponent on n_depends_on in the complexity denominator;
+                                 # higher = stronger penalty for factors with many parents
+  cv_n_folds: 5                  # number of cross-validation folds for candidate scoring
+  validation_fraction: 0.20      # fraction of participants held out for final winner validation;
+                                 # split is performed once before round 1 and reused
+  min_validation_improvement:    # minimum mean per-participant log-likelihood gain on the
+    0.001                        # held-out set required to accept a winner
+
+  # ── Decomposition check ────────────────────────────────────────────────────
+  decomposition_check_enabled: true
+  decomposition_check_max_arity: 2
+
+  # ── Effect search (Phase 2 — interaction terms) ────────────────────────────
+  run_effect_search: true
+  max_interaction_order: 2
+  max_interactions_per_round: 1
+  effect_search_full_pass: false
+  effect_search_full_pass_interval:
+  effect_search_min_cv_improvement: 0.05
+  effect_search_min_validation_improvement: 0.001
+  llm_rank_interactions: false
+
+  # ── Factor space constraints ───────────────────────────────────────────────
+  allowed_factor_types: ["within_trial", "window"]
+  allowed_factor_classes: ["discrete"]
+  max_window_width: 4
+
+  # ── Stagnation detection ───────────────────────────────────────────────────
+  stagnation_epsilon: 0.001
+  stagnation_patience: 0
+
+  # ── Seeding strategy ───────────────────────────────────────────────────────
+  seeding_strategy:
+    type: "random"
+    n_candidates: 50
+    seed_multiplier: 1.0
+    template_bias: "uniform"
+    max_depends_on: 3
+    max_output_levels: 3
+    max_table_size: 128
+    allow_window: true
+
+  # ── Evolution strategy ─────────────────────────────────────────────────────
+  evolution_strategy:
+    type: "llm_genetic"
+    n_candidates: 5
+    top_k: 3
+    n_elite: 1
+    n_tournament_parents: 3
+    n_diversity_parents: 1
+    operator_mix:
+      mutation: 0.40
+      crossover: 0.30
+      repair: 0.20
+      novel: 0.10
+    diversity_threshold: 0.1
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+llm:
+  model: "claude-sonnet-4-6"
+  max_tokens_candidate: 2000
+  max_tokens_predicate: 1000
+  candidate_temperature: 0.9
+  predicate_temperature: 0.2
+
+# ── Statistical ───────────────────────────────────────────────────────────────
+statistical:
+  min_level_count: 5
+
+# ── Evaluation defaults (ground_truth_factors stay per-benchmark) ─────────────
+evaluation:
+  bijection_threshold: 0.95
+  continuous_correlation_threshold: 0.7
+  ground_truth_interactions: []

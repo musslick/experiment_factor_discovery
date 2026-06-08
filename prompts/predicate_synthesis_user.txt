@@ -1,18 +1,17 @@
 ## Factor to implement
-Name:        <<name>>
-Type:        <<factor_type>>
-Description: <<description>>
-Levels:      <<levels>>
-Depends on:  <<depends_on>>
+Name:          <<name>>
+Type:          <<factor_type>>
+Class:         <<factor_class>>
+<<window_width_line>>
+Description:   <<description>>
+Levels:        <<levels>>
+Depends on:    <<depends_on>>
 
 ## Available keys in each trial dict
 Observable factors:
   participant_id : int
   trial_index    : int
-  task           : "color_naming" | "word_reading"
-  color          : "red" | "blue" | "green"
-  word           : "red" | "blue" | "green"
-  correct        : 0 | 1
+<<observable_factor_descriptions>>
 
 <<discovered_section>>
 <<error_section>>

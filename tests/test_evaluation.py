@@ -382,3 +382,114 @@ class TestOracleEvaluation:
         )
         assert report.f1 == pytest.approx(1.0)
         assert report.matched_pairs[0].agreement_rate == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# TestComputeCorrelation
+# ---------------------------------------------------------------------------
+
+class TestComputeCorrelation:
+    """Tests for the new compute_correlation function."""
+
+    def test_import(self):
+        from src.analysis.evaluation import compute_correlation
+        assert callable(compute_correlation)
+
+    def test_perfect_positive_correlation(self):
+        from src.analysis.evaluation import compute_correlation
+        s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        assert compute_correlation(s, s) == pytest.approx(1.0)
+
+    def test_perfect_negative_correlation_returns_abs(self):
+        from src.analysis.evaluation import compute_correlation
+        s  = pd.Series([float(i) for i in range(10)])
+        s2 = pd.Series([float(9 - i) for i in range(10)])
+        # Spearman ρ = -1.0; abs should give 1.0
+        assert compute_correlation(s, s2) == pytest.approx(1.0)
+
+    def test_independent_series_near_zero(self):
+        from src.analysis.evaluation import compute_correlation
+        rng = np.random.default_rng(77)
+        s1 = pd.Series(rng.normal(0, 1, 200))
+        s2 = pd.Series(rng.normal(0, 1, 200))
+        rho = compute_correlation(s1, s2)
+        assert rho < 0.3  # random noise should be near zero
+
+    def test_nan_rows_excluded(self):
+        from src.analysis.evaluation import compute_correlation
+        s1 = pd.Series([1.0, 2.0, 3.0, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        s2 = pd.Series([1.0, 2.0, 3.0, 4.0,    5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+        rho = compute_correlation(s1, s2)
+        assert rho > 0.9  # should still be high after dropping the NaN row
+
+    def test_fewer_than_3_valid_rows_returns_zero(self):
+        from src.analysis.evaluation import compute_correlation
+        s1 = pd.Series([1.0, 2.0])
+        s2 = pd.Series([4.0, 5.0])
+        assert compute_correlation(s1, s2) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# TestContinuousFactorMatching
+# ---------------------------------------------------------------------------
+
+class TestContinuousFactorMatching:
+    """Tests for match_factors_bijection with continuous factors."""
+
+    def _make_continuous_discovered(self, name, values):
+        from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor
+        candidate = CandidateFactor(
+            name=name, description="test", factor_type="within_trial",
+            factor_class="continuous", levels=[], depends_on=[],
+        )
+        return DiscoveredFactor(
+            candidate=candidate, column_name=name, column_values=values,
+            lrt_statistic=0.0, lrt_pvalue=1.0, lrt_dof=0,
+            formula_with=f"correct ~ {name}",
+        )
+
+    def _gt_continuous(self, name):
+        return GroundTruthFactor(name=name, type="within_trial",
+                                 levels=[], factor_class="continuous")
+
+    def test_continuous_perfect_match(self):
+        n = 100
+        rng = np.random.default_rng(1)
+        vals = pd.Series(rng.normal(0, 1, n))
+        df = pd.DataFrame({"gt_cont": vals})
+
+        disc = self._make_continuous_discovered("found_cont", vals.copy())
+        gt   = self._gt_continuous("gt_cont")
+
+        report = match_factors_bijection([gt], [disc], df,
+                                          continuous_threshold=0.7)
+        assert report.precision == pytest.approx(1.0)
+        assert report.recall    == pytest.approx(1.0)
+        assert report.matched_pairs[0].correlation == pytest.approx(1.0, abs=0.01)
+
+    def test_cross_class_never_matches(self, base_df):
+        """A discrete GT factor should never match a continuous discovered factor."""
+        rng  = np.random.default_rng(5)
+        vals = pd.Series(rng.normal(0, 1, N))
+        disc_cont = self._make_continuous_discovered("cont_noise", vals)
+        gt_disc   = _gt("congruency", "within_trial", ["congruent", "incongruent"])
+
+        report = match_factors_bijection([gt_disc], [disc_cont], base_df,
+                                          threshold=0.95, continuous_threshold=0.7)
+        assert report.precision == pytest.approx(0.0)
+        assert report.recall    == pytest.approx(0.0)
+        assert "congruency"  in report.unmatched_ground_truth
+        assert "cont_noise"  in report.unmatched_discovered
+
+    def test_weak_correlation_below_threshold_not_matched(self):
+        n = 200
+        rng = np.random.default_rng(42)
+        gt_vals   = pd.Series(rng.normal(0, 1, n))
+        disc_vals = pd.Series(rng.normal(0, 1, n))  # independent
+        df = pd.DataFrame({"gt_cont": gt_vals})
+
+        disc = self._make_continuous_discovered("weak_cont", disc_vals)
+        gt   = self._gt_continuous("gt_cont")
+
+        report = match_factors_bijection([gt], [disc], df, continuous_threshold=0.7)
+        assert len(report.matched_pairs) == 0

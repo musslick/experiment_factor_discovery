@@ -1,0 +1,7 @@
+Already-discovered factors:
+<<discovered_factors>>
+
+Candidate interaction pairs to rank (currently unordered):
+<<candidate_interactions>>
+
+Rank all candidate interaction pairs from most to least psychologically plausible as predictors of accuracy. Return a JSON array as specified in the system prompt.

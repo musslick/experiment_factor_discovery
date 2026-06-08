@@ -11,6 +11,7 @@ and synthesis is retried up to max_retries times.
 """
 
 import json
+import random
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -39,11 +40,20 @@ def _format_discovered_section(discovered: List[DiscoveredFactor]) -> str:
         return ""
     lines = ["Already-discovered factor columns (available as trial dict keys):"]
     for d in discovered:
-        levels_str = ", ".join(f'"{lv}"' for lv in d.candidate.levels)
-        lines.append(
-            f"  {d.column_name} ({d.candidate.factor_type}): "
-            f"levels=[{levels_str}]"
-        )
+        if d.candidate.factor_class == "continuous":
+            lines.append(
+                f"  {d.column_name} ({d.candidate.factor_type}, continuous): "
+                f"returns float — {d.candidate.description}"
+            )
+        else:
+            levels_str = ", ".join(f'"{lv}"' for lv in d.candidate.levels)
+            type_str = d.candidate.factor_type
+            if d.candidate.factor_type == "window":
+                type_str += f" width={d.candidate.window_width}"
+            lines.append(
+                f"  {d.column_name} ({type_str}, discrete): "
+                f"levels=[{levels_str}]"
+            )
     return "\n".join(lines)
 
 
@@ -85,6 +95,7 @@ def synthesize_predicate(
     timeout_seconds: int = 10,
     backend: str = "subprocess",
     max_tokens: int = 1200,
+    observable_factor_descriptions: str = "",
 ) -> Optional[str]:
     """
     Ask the LLM to write a ``compute_factor`` function for ``candidate``,
@@ -111,13 +122,26 @@ def synthesize_predicate(
             if previous_error else ""
         )
 
+        window_width_line = (
+            f"Window width: {candidate.window_width}"
+            if candidate.factor_type == "window" else ""
+        )
+        levels_str = (
+            str(candidate.levels)
+            if candidate.factor_class == "discrete"
+            else "(continuous — return a float, no declared levels)"
+        )
+
         user = _fill(
             user_template,
             name=candidate.name,
             factor_type=candidate.factor_type,
+            factor_class=candidate.factor_class,
+            window_width_line=window_width_line,
             description=candidate.description,
-            levels=str(candidate.levels),
+            levels=levels_str,
             depends_on=str(candidate.depends_on),
+            observable_factor_descriptions=observable_factor_descriptions,
             discovered_section=_format_discovered_section(discovered),
             error_section=error_section,
         )
@@ -145,13 +169,27 @@ def synthesize_predicate(
             candidate.predicate_status = "syntax_error"
             continue
 
-        # 2. Sandbox validation
+        # 2. Sandbox validation — use a small participant sample so the
+        # validation call stays fast even on large empirical datasets.
+        # Synthesis only needs to confirm the code runs correctly and returns
+        # the right types/levels; it does not need the full dataset.
+        _MAX_SYNTHESIS_PARTICIPANTS = 50
+        pids = list(working_df["participant_id"].unique())
+        if len(pids) > _MAX_SYNTHESIS_PARTICIPANTS:
+            rng = random.Random(attempt)
+            sample_pids = set(rng.sample(pids, _MAX_SYNTHESIS_PARTICIPANTS))
+            validation_df = working_df[working_df["participant_id"].isin(sample_pids)]
+        else:
+            validation_df = working_df
+
         sandbox = run_predicate(
             predicate_code=compute_code,
-            df=working_df,
+            df=validation_df,
             factor_type=candidate.factor_type,
+            window_width=candidate.window_width,
             timeout_seconds=timeout_seconds,
             backend=backend,
+            depends_on=candidate.depends_on,
         )
         if not sandbox.success:
             previous_error = (
@@ -161,26 +199,36 @@ def synthesize_predicate(
             candidate.predicate_status = sandbox.error_type
             continue
 
-        # 3. Return-type check: all non-None values must be strings
-        bad = [v for v in sandbox.values if v is not None and not isinstance(v, str)]
-        if bad:
-            previous_error = (
-                f"compute_factor returned non-string values "
-                f"(e.g. {bad[:2]}). It must return a string."
-            )
-            candidate.predicate_status = "type_error"
-            continue
+        # 3. Return-type check (branches by factor_class)
+        if candidate.factor_class == "continuous":
+            bad = [v for v in sandbox.values if v is not None and not isinstance(v, (int, float))]
+            if bad:
+                previous_error = (
+                    f"compute_factor returned non-numeric values "
+                    f"(e.g. {bad[:2]}). For a continuous factor it must return a float."
+                )
+                candidate.predicate_status = "type_error"
+                continue
+        else:
+            bad = [v for v in sandbox.values if v is not None and not isinstance(v, str)]
+            if bad:
+                previous_error = (
+                    f"compute_factor returned non-string values "
+                    f"(e.g. {bad[:2]}). It must return a string."
+                )
+                candidate.predicate_status = "type_error"
+                continue
 
-        # 4. Level membership check: returned strings must be declared level names
-        returned = {v for v in sandbox.values if v is not None}
-        undeclared = returned - set(candidate.levels)
-        if undeclared:
-            previous_error = (
-                f"compute_factor returned level values not in the declared "
-                f"levels {candidate.levels}: {undeclared}"
-            )
-            candidate.predicate_status = "type_error"
-            continue
+            # 4. Level membership check (discrete only)
+            returned = {v for v in sandbox.values if v is not None}
+            undeclared = returned - set(candidate.levels)
+            if undeclared:
+                previous_error = (
+                    f"compute_factor returned level values not in the declared "
+                    f"levels {candidate.levels}: {undeclared}"
+                )
+                candidate.predicate_status = "type_error"
+                continue
 
         # All checks passed
         candidate.sweetpea_code = sweetpea_code

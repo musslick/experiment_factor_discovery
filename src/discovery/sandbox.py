@@ -65,9 +65,10 @@ import json, sys, collections
 # --- END PREDICATE CODE ---
 
 data = json.loads(sys.stdin.buffer.read().decode('utf-8'))
-rows        = data['rows']
-factor_type = data['factor_type']
-n           = data['n']
+rows         = data['rows']
+factor_type  = data['factor_type']
+window_width = data.get('window_width', 2)
+n            = data['n']
 
 results = [None] * n
 by_pid  = collections.defaultdict(list)
@@ -81,10 +82,11 @@ try:
             orig = row['__idx__']
             if factor_type == 'within_trial':
                 results[orig] = compute_factor(row)
-            else:
-                results[orig] = (
-                    None if i == 0 else compute_factor(p_rows[i - 1], row)
-                )
+            else:  # window (includes former transition width=2)
+                if i < window_width - 1:
+                    results[orig] = None
+                else:
+                    results[orig] = compute_factor(p_rows[i - window_width + 1 : i + 1])
 except Exception:
     import traceback
     traceback.print_exc(file=sys.stderr)
@@ -102,9 +104,10 @@ import json, sys, collections
 # --- END PREDICATE CODE ---
 
 data = json.loads({data_repr})
-rows        = data['rows']
-factor_type = data['factor_type']
-n           = data['n']
+rows         = data['rows']
+factor_type  = data['factor_type']
+window_width = data.get('window_width', 2)
+n            = data['n']
 
 results = [None] * n
 by_pid  = collections.defaultdict(list)
@@ -118,10 +121,11 @@ try:
             orig = row['__idx__']
             if factor_type == 'within_trial':
                 results[orig] = compute_factor(row)
-            else:
-                results[orig] = (
-                    None if i == 0 else compute_factor(p_rows[i - 1], row)
-                )
+            else:  # window (includes former transition width=2)
+                if i < window_width - 1:
+                    results[orig] = None
+                else:
+                    results[orig] = compute_factor(p_rows[i - window_width + 1 : i + 1])
 except Exception:
     import traceback
     traceback.print_exc(file=sys.stderr)
@@ -135,7 +139,12 @@ print(json.dumps(results))
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _serialize_df(df: pd.DataFrame, factor_type: str) -> dict:
+def _serialize_df(
+    df: pd.DataFrame,
+    factor_type: str,
+    window_width: int = 2,
+    keep_cols: Optional[List[str]] = None,
+) -> dict:
     """
     Serialise df to a JSON-safe dict consumed by the harness.
 
@@ -143,12 +152,21 @@ def _serialize_df(df: pd.DataFrame, factor_type: str) -> dict:
     NaN as null) and then immediately deserialises to get pure Python types.
     ``__idx__`` is the row's position in the reset-index DataFrame so the
     harness can write results back in original row order.
+
+    keep_cols: if provided, only these columns are serialised (in addition to
+    participant_id and trial_index which are always required by the harness).
+    Filtering here reduces the JSON payload size and subprocess parse time.
     """
+    if keep_cols is not None:
+        required = {"participant_id", "trial_index"}
+        cols = [c for c in keep_cols if c in df.columns]
+        cols = list(dict.fromkeys([c for c in required if c in df.columns] + cols))
+        df = df[cols]
     json_str = df.reset_index(drop=True).to_json(orient="records", default_handler=str)
     records = json.loads(json_str)
     for i, row in enumerate(records):
         row["__idx__"] = i
-    return {"rows": records, "factor_type": factor_type, "n": len(df)}
+    return {"rows": records, "factor_type": factor_type, "window_width": window_width, "n": len(df)}
 
 
 def _classify_error(stderr: str, returncode: int) -> tuple:
@@ -166,9 +184,11 @@ def _run_subprocess(
     df: pd.DataFrame,
     factor_type: str,
     timeout_seconds: int,
+    window_width: int = 2,
+    keep_cols: Optional[List[str]] = None,
 ) -> SandboxResult:
     harness_src = _SUBPROCESS_HARNESS.format(predicate_code=predicate_code)
-    data_payload = json.dumps(_serialize_df(df, factor_type))
+    data_payload = json.dumps(_serialize_df(df, factor_type, window_width, keep_cols))
 
     fd, harness_path = tempfile.mkstemp(suffix=".py", prefix="sp_harness_")
     try:
@@ -218,6 +238,8 @@ def _run_docker(
     df: pd.DataFrame,
     factor_type: str,
     timeout_seconds: int,
+    window_width: int = 2,
+    keep_cols: Optional[List[str]] = None,
 ) -> SandboxResult:
     try:
         from llm_sandbox import SandboxSession  # type: ignore
@@ -230,7 +252,7 @@ def _run_docker(
             ),
         )
 
-    data_json = json.dumps(_serialize_df(df, factor_type))
+    data_json = json.dumps(_serialize_df(df, factor_type, window_width, keep_cols))
     harness_src = _DOCKER_HARNESS.format(
         predicate_code=predicate_code,
         data_repr=repr(data_json),      # safely embeds JSON as a Python string literal
@@ -271,6 +293,8 @@ def run_predicate(
     factor_type: str,
     timeout_seconds: int = 10,
     backend: str = "subprocess",
+    window_width: int = 2,
+    depends_on: Optional[List[str]] = None,
 ) -> SandboxResult:
     """
     Execute ``predicate_code`` against ``df`` and return level assignments.
@@ -280,18 +304,32 @@ def run_predicate(
     predicate_code  : Python source defining ``compute_factor``.
     df              : Observable trial DataFrame (participant_id, trial_index,
                       task, color, word, and any previously discovered columns).
-    factor_type     : ``"within_trial"`` or ``"transition"``.
-    timeout_seconds : Execution timeout (seconds).  Applies to subprocess only;
-                      Docker sessions respect the container runtime's limits.
+    factor_type     : ``"within_trial"`` or ``"window"``.
+                      ``"transition"`` is accepted as a backward-compatible alias
+                      for ``"window"`` with ``window_width=2``.
+    timeout_seconds : Execution timeout (seconds).
     backend         : ``"subprocess"`` (default) or ``"docker"``.
+    window_width    : Number of consecutive trial dicts passed to compute_factor
+                      for window factors (ignored for within_trial).
+    depends_on      : Column names that compute_factor actually reads.  When
+                      provided, only these columns (plus the mandatory
+                      participant_id and trial_index) are serialised and sent
+                      to the subprocess, reducing payload size and parse time.
 
     Returns
     -------
     SandboxResult
         .values is a list of length ``len(df)``, aligned to the original row
-        order.  Entries are strings (level names) or ``None`` (first trial of
-        each participant for transition factors).
+        order.  Entries are the raw return values of compute_factor or ``None``
+        (first window_width-1 trials of each participant for window factors).
     """
+    # Normalize legacy "transition" → "window" with width=2
+    if factor_type == "transition":
+        factor_type = "window"
+        window_width = 2
+
+    keep_cols = list(depends_on) if depends_on is not None else None
+
     if backend == "docker":
-        return _run_docker(predicate_code, df, factor_type, timeout_seconds)
-    return _run_subprocess(predicate_code, df, factor_type, timeout_seconds)
+        return _run_docker(predicate_code, df, factor_type, timeout_seconds, window_width, keep_cols)
+    return _run_subprocess(predicate_code, df, factor_type, timeout_seconds, window_width, keep_cols)

@@ -14,11 +14,12 @@ matched simultaneously.
 
 from dataclasses import dataclass
 from itertools import permutations
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
+from scipy.stats import spearmanr
 
 from src.discovery.factor_registry import DiscoveredFactor
 from src.utils.config import GroundTruthFactor
@@ -32,7 +33,8 @@ from src.utils.config import GroundTruthFactor
 class MatchedPair:
     ground_truth_name: str
     discovered_name: str
-    agreement_rate: float
+    agreement_rate: float        # bijection agreement for discrete; |Spearman ρ| for continuous
+    correlation: Optional[float] = None   # set for continuous matches, None for discrete
 
 
 @dataclass
@@ -84,6 +86,25 @@ def compute_agreement(gt_series: pd.Series, disc_series: pd.Series) -> float:
     return best
 
 
+def compute_correlation(gt_series: pd.Series, disc_series: pd.Series) -> float:
+    """
+    Absolute Spearman rank correlation between two continuous series,
+    computed on rows where both are non-NaN.
+
+    Returns 0.0 if fewer than 3 valid rows remain.
+    """
+    combined = pd.DataFrame({"gt": gt_series, "disc": disc_series}).dropna()
+    combined["gt"]   = pd.to_numeric(combined["gt"],   errors="coerce")
+    combined["disc"] = pd.to_numeric(combined["disc"], errors="coerce")
+    combined = combined.dropna()
+    if len(combined) < 3:
+        return 0.0
+    rho, _ = spearmanr(combined["gt"], combined["disc"])
+    if not np.isfinite(rho):
+        return 0.0
+    return float(abs(rho))
+
+
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
@@ -93,17 +114,23 @@ def match_factors_bijection(
     discovered_factors: List[DiscoveredFactor],
     full_df: pd.DataFrame,
     threshold: float = 0.95,
+    continuous_threshold: float = 0.7,
 ) -> EvaluationReport:
     """
     Match discovered factors to ground-truth factors via maximum-weight bijection.
 
+    Discrete factors are matched by bijection agreement (compute_agreement).
+    Continuous factors are matched by absolute Spearman correlation (compute_correlation).
+    Cross-class pairs (discrete GT vs continuous discovered, or vice versa) are
+    assigned an agreement of 0 and never matched.
+
     Parameters
     ----------
-    ground_truth_factors : Ground-truth factor specs from the benchmark config;
-                           each ``name`` must be a column in ``full_df``.
-    discovered_factors   : Factors accepted by the discovery pipeline.
-    full_df              : Complete dataset including ground-truth factor columns.
-    threshold            : Minimum agreement rate to accept a match (default 0.95).
+    ground_truth_factors     : Ground-truth factor specs from the benchmark config.
+    discovered_factors       : Factors accepted by the discovery pipeline.
+    full_df                  : Complete dataset including ground-truth factor columns.
+    threshold                : Minimum agreement rate for discrete matches (default 0.95).
+    continuous_threshold     : Minimum |ρ| for continuous matches (default 0.7).
 
     Returns
     -------
@@ -112,7 +139,6 @@ def match_factors_bijection(
     n_gt   = len(ground_truth_factors)
     n_disc = len(discovered_factors)
 
-    # --- degenerate cases ---
     if n_gt == 0 and n_disc == 0:
         return EvaluationReport([], [], [], 1.0, 1.0, 1.0, 0, 0)
     if n_gt == 0:
@@ -131,14 +157,21 @@ def match_factors_bijection(
             n_ground_truth=n_gt, n_discovered=0,
         )
 
-    # --- build agreement matrix (n_gt × n_disc) ---
+    # Build agreement matrix (n_gt × n_disc)
     agreement = np.zeros((n_gt, n_disc))
     for i, gt in enumerate(ground_truth_factors):
         gt_series = full_df[gt.name]
+        gt_fc = getattr(gt, "factor_class", "discrete")
         for j, disc in enumerate(discovered_factors):
-            agreement[i, j] = compute_agreement(gt_series, disc.column_values)
+            disc_fc = disc.candidate.factor_class
+            if gt_fc != disc_fc:
+                agreement[i, j] = 0.0
+            elif gt_fc == "continuous":
+                agreement[i, j] = compute_correlation(gt_series, disc.column_values)
+            else:
+                agreement[i, j] = compute_agreement(gt_series, disc.column_values)
 
-    # --- maximum-weight bijection via Hungarian algorithm ---
+    # Maximum-weight bijection via Hungarian algorithm
     row_ind, col_ind = linear_sum_assignment(-agreement)
 
     matched_gt:   set = set()
@@ -146,11 +179,15 @@ def match_factors_bijection(
     matched_pairs: List[MatchedPair] = []
 
     for r, c in zip(row_ind, col_ind):
-        if agreement[r, c] >= threshold:
+        gt_fc = getattr(ground_truth_factors[r], "factor_class", "discrete")
+        thresh = continuous_threshold if gt_fc == "continuous" else threshold
+        if agreement[r, c] >= thresh:
+            corr = float(agreement[r, c]) if gt_fc == "continuous" else None
             matched_pairs.append(MatchedPair(
                 ground_truth_name=ground_truth_factors[r].name,
                 discovered_name=discovered_factors[c].column_name,
                 agreement_rate=float(agreement[r, c]),
+                correlation=corr,
             ))
             matched_gt.add(r)
             matched_disc.add(c)

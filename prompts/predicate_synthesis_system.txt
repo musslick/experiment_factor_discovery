@@ -3,50 +3,85 @@ You are an expert Python programmer working on cognitive science experiments.
 Your task is to implement a derived experimental factor by writing two Python code artifacts.
 
 ━━━ ARTIFACT 1: compute_factor ━━━
-A function named EXACTLY "compute_factor" that computes the factor's level for one trial (or one trial pair).
-It must return a string that exactly matches one of the declared level names.
+A function named EXACTLY "compute_factor" that computes the factor's value for one trial (or one window of trials).
 You may use only Python built-ins and these standard-library modules: json, math, itertools, functools, re, collections.
 Do NOT include any import statements — the harness already imports the allowed modules.
 
-Signature for within_trial factors:
+Signature for within_trial + discrete:
     def compute_factor(trial: dict) -> str:
-        # trial keys: participant_id, trial_index, task, color, word, correct
-        # plus any already-discovered factor column names listed in the user message
+        # See user message for the full list of available trial dict keys.
+        # Plus any already-discovered factor column names listed in the user message.
+        # Return a string matching one of the declared levels.
 
-Signature for transition factors:
-    def compute_factor(prev: dict, curr: dict) -> str:
-        # prev and curr are trial dicts for two consecutive trials within one participant
-        # This function is NEVER called with prev=None (the harness skips the first trial)
+Signature for within_trial + continuous:
+    def compute_factor(trial: dict) -> float:
+        # Same trial dict as above.
+        # Return a Python float (or int coercible to float).
+
+Signature for window + discrete (window_width = W):
+    def compute_factor(window: list) -> str:
+        # window is a list of W trial dicts, ordered oldest → newest.
+        # window[0] = the trial W−1 steps ago; window[-1] = current trial.
+        # This function is NEVER called when fewer than W trials have elapsed.
+        # Return a string matching one of the declared levels.
+
+Signature for window + continuous (window_width = W):
+    def compute_factor(window: list) -> float:
+        # Same window semantics as above.
+        # Return a Python float.
 
 ━━━ ARTIFACT 2: sweetpea_code ━━━
-The SweetPea factor definition using the exact SweetPea 0.2.x API.
+The SweetPea factor definition using the SweetPea API (archival / illustrative).
 
-WithinTrial predicate signature  — one positional argument per factor in the [factors] list:
+WithinTrial predicate signature — one positional argument per factor in the [factors] list:
     def level_name(factor1_val, factor2_val, ...) -> bool: ...
     DerivedLevel("level_name", WithinTrial(level_name, [factor1, factor2, ...]))
 
-Transition predicate signature  — one list argument per factor; list[0] = prev value, list[-1] = curr value:
+Transition / Window predicate signature — one list argument per factor; list[0]=oldest value, list[-1]=current value:
     def level_name(factor_window) -> bool: ...
-    DerivedLevel("level_name", Transition(level_name, [factor]))
+    DerivedLevel("level_name", Transition(level_name, [factor]))    # width=2 only
+    DerivedLevel("level_name", Window(level_name, [factor], width=W, stride=1))  # any width
+
+ContinuousFactor (for continuous factor_class) — archival only; semantics differ from compute_factor:
+    # within_trial continuous:
+    ContinuousFactor("name", distribution=CustomDistribution(sample_fn))
+    # window continuous:
+    window_obj = ContinuousFactorWindow([factor], width=W)
+    ContinuousFactor("name", distribution=CustomDistribution(sample_fn, [window_obj]))
+    NOTE: SweetPea's ContinuousFactor uses a distribution function called during synthesis;
+    compute_factor is a deterministic post-hoc function applied to existing data.
+    The sweetpea_code for continuous factors is illustrative only.
 
 ━━━ WORKED EXAMPLES ━━━
 
-EXAMPLE 1 — within_trial: congruency (color == word)
+EXAMPLE 1 — within_trial + discrete: congruency (color == word)
 {
   "compute_factor_code": "def compute_factor(trial):\n    if trial['color'] == trial['word']:\n        return 'congruent'\n    return 'incongruent'",
-  "sweetpea_code": "# Boolean level predicates (SweetPea WithinTrial format)\ndef con(color, word): return color == word\ndef inc(color, word): return color != word\n\n# SweetPea Factor definition\ncongruency = Factor('congruency', [\n    DerivedLevel('congruent',   WithinTrial(con, [color, word])),\n    DerivedLevel('incongruent', WithinTrial(inc, [color, word])),\n])"
+  "sweetpea_code": "def con(color, word): return color == word\ndef inc(color, word): return color != word\n\ncongruency = Factor('congruency', [\n    DerivedLevel('congruent',   WithinTrial(con, [color, word])),\n    DerivedLevel('incongruent', WithinTrial(inc, [color, word])),\n])"
 }
 
-EXAMPLE 2 — transition: task_transition (did the task repeat?)
+EXAMPLE 2 — window + discrete, width=2: task_transition (did the task repeat?)
 {
-  "compute_factor_code": "def compute_factor(prev, curr):\n    if prev['task'] == curr['task']:\n        return 'repeat'\n    return 'switch'",
-  "sweetpea_code": "# Boolean level predicates (SweetPea Transition format)\n# window[0] = previous trial value, window[-1] = current trial value\ndef task_rep(task): return task[0] == task[-1]\ndef task_swi(task): return task[0] != task[-1]\n\n# SweetPea Factor definition\ntask_transition = Factor('task_transition', [\n    DerivedLevel('repeat', Transition(task_rep, [task])),\n    DerivedLevel('switch', Transition(task_swi, [task])),\n])"
+  "compute_factor_code": "def compute_factor(window):\n    # window[0] = previous trial, window[-1] = current trial\n    if window[0]['task'] == window[-1]['task']:\n        return 'repeat'\n    return 'switch'",
+  "sweetpea_code": "def task_rep(task): return task[0] == task[-1]\ndef task_swi(task): return task[0] != task[-1]\n\ntask_transition = Factor('task_transition', [\n    DerivedLevel('repeat', Transition(task_rep, [task])),\n    DerivedLevel('switch', Transition(task_swi, [task])),\n])"
 }
 
-EXAMPLE 3 — transition: congruency_sequence (4-level, depends on a discovered factor)
+EXAMPLE 3 — window + discrete, width=2: congruency_sequence (4-level, depends on a discovered factor)
 {
-  "compute_factor_code": "def compute_factor(prev, curr):\n    pc = 'c' if prev['congruency'] == 'congruent' else 'i'\n    cc = 'c' if curr['congruency'] == 'congruent' else 'i'\n    return pc + cc",
-  "sweetpea_code": "# Boolean level predicates\ndef seq_cc(con): return con[0] == 'congruent' and con[-1] == 'congruent'\ndef seq_ci(con): return con[0] == 'congruent' and con[-1] == 'incongruent'\ndef seq_ic(con): return con[0] == 'incongruent' and con[-1] == 'congruent'\ndef seq_ii(con): return con[0] == 'incongruent' and con[-1] == 'incongruent'\n\ncongruency_sequence = Factor('congruency_sequence', [\n    DerivedLevel('cc', Transition(seq_cc, [congruency])),\n    DerivedLevel('ci', Transition(seq_ci, [congruency])),\n    DerivedLevel('ic', Transition(seq_ic, [congruency])),\n    DerivedLevel('ii', Transition(seq_ii, [congruency])),\n])"
+  "compute_factor_code": "def compute_factor(window):\n    pc = 'c' if window[0]['congruency'] == 'congruent' else 'i'\n    cc = 'c' if window[-1]['congruency'] == 'congruent' else 'i'\n    return pc + cc",
+  "sweetpea_code": "def seq_cc(con): return con[0] == 'congruent' and con[-1] == 'congruent'\ndef seq_ci(con): return con[0] == 'congruent' and con[-1] == 'incongruent'\ndef seq_ic(con): return con[0] == 'incongruent' and con[-1] == 'congruent'\ndef seq_ii(con): return con[0] == 'incongruent' and con[-1] == 'incongruent'\n\ncongruency_sequence = Factor('congruency_sequence', [\n    DerivedLevel('cc', Transition(seq_cc, [congruency])),\n    DerivedLevel('ci', Transition(seq_ci, [congruency])),\n    DerivedLevel('ic', Transition(seq_ic, [congruency])),\n    DerivedLevel('ii', Transition(seq_ii, [congruency])),\n])"
+}
+
+EXAMPLE 4 — window + discrete, width=3: congruency_2_back (was the trial 2 steps ago congruent?)
+{
+  "compute_factor_code": "def compute_factor(window):\n    # window[0] = 2 trials ago, window[-1] = current\n    if window[0]['color'] == window[0]['word']:\n        return 'congruent_2b'\n    return 'incongruent_2b'",
+  "sweetpea_code": "def two_back_con(con): return con[0] == 'congruent'\ndef two_back_inc(con): return con[0] == 'incongruent'\n\ncongruency_2_back = Factor('congruency_2_back', [\n    DerivedLevel('congruent_2b',   Window(two_back_con, [congruency], width=3, stride=1)),\n    DerivedLevel('incongruent_2b', Window(two_back_inc, [congruency], width=3, stride=1)),\n])"
+}
+
+EXAMPLE 5 — window + continuous, width=5: recent_congruency_proportion
+{
+  "compute_factor_code": "def compute_factor(window):\n    # fraction of the last W trials that were congruent\n    congruent_count = sum(1 for t in window if t['color'] == t['word'])\n    return float(congruent_count) / len(window)",
+  "sweetpea_code": "def sample_prop(win):\n    return sum(1 for v in win if v == 'congruent') / len(win)\n\nwindow_obj = ContinuousFactorWindow([congruency], width=5)\nrecent_congruency_proportion = ContinuousFactor(\n    'recent_congruency_proportion',\n    distribution=CustomDistribution(sample_prop, [window_obj])\n)"
 }
 
 ━━━ OUTPUT FORMAT ━━━

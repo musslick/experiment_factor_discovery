@@ -315,3 +315,119 @@ class TestLRT:
         n_valid_trans = int(synthetic_df["task_transition"].notna().sum())
         assert result_with_trans.n_obs == n_valid_trans
         assert result_without_trans.n_obs == N_TRIALS  # congruency has no NaN
+
+
+# ---------------------------------------------------------------------------
+# TestBuildFormulaWithClass
+# ---------------------------------------------------------------------------
+
+class TestBuildFormulaWithClass:
+    """Tests for the factor_class parameter of build_extended_formula."""
+
+    def test_discrete_default_uses_C_wrapper(self):
+        f = build_extended_formula("correct ~ 1", "my_factor")
+        assert "C(my_factor)" in f
+
+    def test_discrete_explicit_uses_C_wrapper(self):
+        f = build_extended_formula("correct ~ 1", "my_factor", factor_class="discrete")
+        assert "C(my_factor)" in f
+
+    def test_continuous_uses_bare_name(self):
+        f = build_extended_formula("correct ~ 1", "rt_proxy", factor_class="continuous")
+        assert f == "correct ~ rt_proxy"
+        assert "C(" not in f
+
+    def test_continuous_appended_to_existing_terms(self):
+        f = build_extended_formula("correct ~ C(congruency)", "rt_proxy", factor_class="continuous")
+        assert f == "correct ~ C(congruency) + rt_proxy"
+
+    def test_mixed_formula_columns_extracted_correctly(self):
+        """Continuous predictor enters the model as a numeric column — LRT should detect a real effect."""
+        rng = np.random.default_rng(42)
+        df = _make_synthetic_df()  # standalone helper (fixture name is already taken)
+        n = len(df)
+        # Create a continuous column that is correlated with the outcome
+        df["rt_proxy"] = rng.normal(0, 1, n)
+        result = compare_models_lrt(
+            df,
+            formula_null="correct ~ 1",
+            formula_alt="correct ~ rt_proxy",
+        )
+        # rt_proxy is random noise — should NOT be significant
+        assert result.pvalue > 0.01
+
+
+def _make_synthetic_df():
+    """Standalone helper mirroring the module-scoped fixture for class-level use."""
+    rng = np.random.default_rng(SEED)
+    tasks  = ["color_naming", "word_reading"]
+    colors = ["red", "blue", "green"]
+    words  = ["red", "blue", "green"]
+    task  = rng.choice(tasks,  N_TRIALS)
+    color = rng.choice(colors, N_TRIALS)
+    word  = rng.choice(words,  N_TRIALS)
+    congruency = np.where(color == word, "congruent", "incongruent")
+    block_size = 18
+    task_transition = np.empty(N_TRIALS, dtype=object)
+    for i in range(N_TRIALS):
+        if i % block_size == 0:
+            task_transition[i] = np.nan
+        else:
+            task_transition[i] = "repeat" if task[i] == task[i - 1] else "switch"
+    logit = (
+        INTERCEPT
+        + BETA_CON      * (congruency == "congruent").astype(float)
+        + BETA_TASK_REP * (task_transition == "repeat").astype(float)
+    )
+    correct = rng.binomial(1, _sigmoid(logit)).astype(int)
+    return pd.DataFrame({
+        "task": task, "color": color, "word": word,
+        "congruency": congruency, "task_transition": task_transition, "correct": correct,
+    })
+
+
+# ---------------------------------------------------------------------------
+# TestEncodeContinuousFactor
+# ---------------------------------------------------------------------------
+
+class TestEncodeContinuousFactor:
+    """Tests for the new encode_continuous_factor and the dispatcher."""
+
+    def _make_index(self, n=20):
+        return pd.RangeIndex(n)
+
+    def test_valid_float_values(self):
+        from src.analysis.factor_encoder import encode_continuous_factor
+        values = [0.1, 0.9, 0.5, None, 0.3] * 4
+        s, ok, reason = encode_continuous_factor(values, self._make_index(20))
+        assert ok, reason
+        assert s.dtype == float
+        assert s.isna().sum() == 4  # 4 Nones become NaN
+
+    def test_non_numeric_values_invalid(self):
+        from src.analysis.factor_encoder import encode_continuous_factor
+        values = ["congruent", "incongruent"] * 10
+        _, ok, reason = encode_continuous_factor(values, self._make_index(20))
+        assert not ok
+        assert "non-numeric" in reason.lower()
+
+    def test_length_mismatch_invalid(self):
+        from src.analysis.factor_encoder import encode_continuous_factor
+        _, ok, reason = encode_continuous_factor([0.1] * 5, self._make_index(20))
+        assert not ok
+        assert "length mismatch" in reason.lower()
+
+    def test_dispatcher_routes_to_continuous(self):
+        values = [1.0, 2.0, 3.0] * 5 + [None] * 5
+        s, ok, _ = encode_factor(values, self._make_index(20),
+                                  declared_levels=[], factor_class="continuous")
+        assert ok
+        assert s.dtype == float
+
+    def test_dispatcher_routes_to_discrete(self):
+        values = ["repeat", "switch"] * 10
+        s, ok, _ = encode_factor(values, self._make_index(20),
+                                  declared_levels=["repeat", "switch"],
+                                  min_level_count=5, factor_class="discrete")
+        assert ok
+        assert s.dtype == object

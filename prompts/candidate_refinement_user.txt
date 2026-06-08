@@ -1,9 +1,5 @@
 ## Behavioural task
-This is a Stroop task. On each trial participants see a colour word (e.g. "red", "blue", "green") printed in coloured ink and must perform one of two tasks:
-  color_naming : report the ink colour (ignore the word meaning)
-  word_reading : report the word meaning (ignore the ink colour)
-The motor response is determined by the task: ink colour → response in color_naming; word meaning → response in word_reading.
-Accuracy (correct / incorrect) is the outcome to be predicted.
+<<task_context>>
 
 ## Observable design factors (available in every trial dict)
 <<observable_factors>>

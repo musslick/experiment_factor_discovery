@@ -157,6 +157,7 @@ def _participant_ll_improvements(
     df_test: pd.DataFrame,
     all_cols: set,
     participant_col: str,
+    outcome_col: str = "correct",
 ) -> List[float]:
     """
     For each participant in df_test, compute summed LL improvement (alt − null)
@@ -175,7 +176,7 @@ def _participant_ll_improvements(
         try:
             p_alt  = np.clip(np.asarray(res_alt.predict(p_df),  dtype=float), 1e-10, 1 - 1e-10)
             p_null = np.clip(np.asarray(res_null.predict(p_df), dtype=float), 1e-10, 1 - 1e-10)
-            y = p_df["correct"].values.astype(float)
+            y = p_df[outcome_col].values.astype(float)
             ll_alt  = float(np.sum(y * np.log(p_alt)  + (1 - y) * np.log(1 - p_alt)))
             ll_null = float(np.sum(y * np.log(p_null) + (1 - y) * np.log(1 - p_null)))
             scores.append(ll_alt - ll_null)
@@ -222,6 +223,7 @@ def score_candidate_cv(
     all_cols = _extract_columns(formula_null) | _extract_columns(formula_alt)
     fit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
 
+    outcome_col = formula_null.split("~")[0].strip()
     per_participant_scores: List[float] = []
 
     for fold_pids in fold_groups:
@@ -253,7 +255,8 @@ def score_candidate_cv(
             continue
 
         fold_scores = _participant_ll_improvements(
-            res_null_f, res_alt_f, test_df, all_cols, participant_col
+            res_null_f, res_alt_f, test_df, all_cols, participant_col,
+            outcome_col=outcome_col,
         )
         # Participants with no valid rows are silently dropped (no -inf added)
         per_participant_scores.extend(fold_scores)
@@ -314,7 +317,11 @@ def evaluate_on_held_out(
     if sep_detected:
         return -np.inf
 
-    scores = _participant_ll_improvements(res_null, res_alt, df_test, all_cols, participant_col)
+    outcome_col = formula_null.split("~")[0].strip()
+    scores = _participant_ll_improvements(
+        res_null, res_alt, df_test, all_cols, participant_col,
+        outcome_col=outcome_col,
+    )
     return float(np.mean(scores)) if scores else -np.inf
 
 
@@ -322,9 +329,16 @@ def evaluate_on_held_out(
 # Formula helpers
 # ---------------------------------------------------------------------------
 
-def build_extended_formula(current_null: str, new_factor_name: str) -> str:
+def build_extended_formula(
+    current_null: str,
+    new_factor_name: str,
+    factor_class: str = "discrete",
+) -> str:
     """
-    Append ``C(new_factor_name)`` to the right-hand side of current_null.
+    Append a term for new_factor_name to the right-hand side of current_null.
+
+    For discrete factors: appends ``C(new_factor_name)`` (treatment-coded categorical).
+    For continuous factors: appends the bare column name (numeric predictor).
 
     Examples
     --------
@@ -333,10 +347,13 @@ def build_extended_formula(current_null: str, new_factor_name: str) -> str:
 
     >>> build_extended_formula("correct ~ C(congruency)", "task_transition")
     'correct ~ C(congruency) + C(task_transition)'
+
+    >>> build_extended_formula("correct ~ 1", "rt_proxy", factor_class="continuous")
+    'correct ~ rt_proxy'
     """
     lhs, rhs = current_null.split("~", 1)
     rhs = rhs.strip()
-    new_term = f"C({new_factor_name})"
+    new_term = new_factor_name if factor_class == "continuous" else f"C({new_factor_name})"
     if rhs == "1":
         return f"{lhs.strip()} ~ {new_term}"
     return f"{lhs.strip()} ~ {rhs} + {new_term}"

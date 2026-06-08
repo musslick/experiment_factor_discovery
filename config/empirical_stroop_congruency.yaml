@@ -1,0 +1,30 @@
+benchmark:
+  name: "stroop_congruency_empirical"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/stroop_data_with_congruency.csv"
+  participant_id_column: "subjectid"
+  n_participants: 466
+  outcome_variable: "accuracy"
+  extra_columns: ["trialnum", "blocknum", "blockcode"]
+  null_formula: "accuracy ~ C(color) + C(word)"
+  full_formula: "accuracy ~ C(color) + C(word) + C(congruency)"
+  task_context: |
+    This is a Stroop task. On each trial a participant sees a colour word (e.g. "red",
+    "blue", "green", "black") printed in coloured ink and must indicate the colour of
+    the ink by pressing a key. Accuracy (correct/incorrect) is the outcome to predict.
+  base_factors:
+    - {name: color, dtype: categorical, levels: [red, blue, green, black]}
+    - {name: word,  dtype: categorical, levels: [red, blue, green, black]}
+  hidden_factors:
+    - name: "congruency"
+      type: "within_trial"
+      levels: ["congruent", "incongruent"]
+      # column: "congruency"   # omitted: defaults to name
+
+discovery:
+  allowed_factor_classes: ["discrete"]
+  sandbox_timeout_seconds: 30
+
+# No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.

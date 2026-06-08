@@ -1,0 +1,30 @@
+## Behavioural task
+<<task_context>>
+
+## Observable design factors
+<<observable_factors>>
+
+## Already-discovered factors
+<<discovered_factors>>
+
+## Permanently banned factors (do NOT propose these)
+<<hard_rejected_factors>>
+
+## Population — Round <<round_num>>, Iteration <<iteration>>
+All candidates scored so far this round, ranked best → worst by adjusted CV score.
+
+<<all_scored_candidates>>
+
+## Parent assignments for this generation
+Apply the specified operator to the specified parent(s):
+
+<<operator_assignments>>
+
+## Request
+Produce exactly <<n_to_generate>> candidates using the operator assignments above.
+- Each candidate must use the assigned operator and reference the assigned parent(s).
+- Include an "operator_applied" field in each JSON element.
+- Do NOT reproduce any already-evaluated candidate (same name or same structure).
+- Do NOT propose factors in the permanently banned list.
+
+Return ONLY a JSON array — no surrounding text.

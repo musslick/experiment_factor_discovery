@@ -120,8 +120,8 @@ class TestCandidateGeneration:
         for c in candidates:
             assert isinstance(c, CandidateFactor)
             assert c.name and isinstance(c.name, str)
-            assert c.factor_type in {"within_trial", "transition"}
-            assert len(c.levels) >= 2
+            assert c.factor_type in {"within_trial", "transition", "window"}
+            assert len(c.levels) >= 2 or c.factor_class == "continuous"
             assert len(c.depends_on) >= 1
 
     def test_congruency_is_proposed(self, candidates):
@@ -311,10 +311,19 @@ class TestPipelineOneRound:
             f"Expected a congruency-like factor among discovered: {names}"
         )
 
-    def test_discovered_factors_are_statistically_significant(self, pipeline_result):
+    def test_discovered_factors_improve_held_out_fit(self, pipeline_result):
+        """
+        Every accepted factor must show positive held-out validation improvement.
+        (lrt_pvalue is a legacy field set to 1.0 as a sentinel in the new pipeline;
+        validation_improvement is the operative acceptance criterion.)
+        """
         for f in pipeline_result.discovered:
-            assert f.lrt_pvalue < 0.05, (
-                f"Factor '{f.column_name}' has p = {f.lrt_pvalue:.4f} ≥ 0.05"
+            assert f.validation_improvement is not None, (
+                f"Factor '{f.column_name}' has no recorded validation_improvement"
+            )
+            assert f.validation_improvement > 0, (
+                f"Factor '{f.column_name}' has validation_improvement = "
+                f"{f.validation_improvement:.4f} ≤ 0"
             )
 
     def test_baseline_formula_updated(self, pipeline_result):

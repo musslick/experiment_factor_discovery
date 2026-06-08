@@ -30,8 +30,10 @@ from typing import List, Optional
 import pandas as pd
 
 from src.analysis.model_comparison import build_extended_formula
+from src.discovery.effect_searcher import EffectSearchResult, run_effect_search
 from src.discovery.factor_registry import DiscoveredFactor, FactorRegistry
 from src.discovery.llm_client import LLMClient
+from src.discovery.strategies import build_seeding_strategy, build_evolution_strategy
 from src.discovery.within_round_search import (
     RoundResult,
     compute_factor_column,
@@ -53,27 +55,36 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
     }
 
     if result.winner is not None:
+        w = result.winner
+        n_part = w.cv_score.n_participants if w.cv_score is not None else None
         log["winner"] = {
-            "name":           result.winner.candidate.name,
-            "factor_type":    result.winner.candidate.factor_type,
-            "levels":         result.winner.candidate.levels,
-            "depends_on":     result.winner.candidate.depends_on,
-            "description":    result.winner.candidate.description,
-            "cv_score_mean":  result.winner.cv_score.mean_ll_improvement,
-            "cv_score_se":    result.winner.cv_score.se_ll_improvement,
-            "n_participants": result.winner.cv_score.n_participants,
+            "name":             w.candidate.name,
+            "factor_type":      w.candidate.factor_type,
+            "levels":           w.candidate.levels,
+            "depends_on":       w.candidate.depends_on,
+            "description":      w.candidate.description,
+            "cv_score_mean":    w.cv_score_mean,
+            "cv_score_se":      w.cv_score_se,
+            "n_participants":   n_part,
+            "predicate_status": w.candidate.predicate_status,
+            "sweetpea_code":    w.candidate.sweetpea_code,
+            "compute_code":     w.candidate.compute_code,
         }
 
     for sc in result.all_scored:
+        n_part = sc.cv_score.n_participants if sc.cv_score is not None else None
         log["all_scored"].append({
-            "name":           sc.candidate.name,
-            "factor_type":    sc.candidate.factor_type,
-            "levels":         sc.candidate.levels,
-            "depends_on":     sc.candidate.depends_on,
-            "description":    sc.candidate.description,
-            "cv_score_mean":  sc.cv_score.mean_ll_improvement,
-            "cv_score_se":    sc.cv_score.se_ll_improvement,
-            "n_participants": sc.cv_score.n_participants,
+            "name":             sc.candidate.name,
+            "factor_type":      sc.candidate.factor_type,
+            "levels":           sc.candidate.levels,
+            "depends_on":       sc.candidate.depends_on,
+            "description":      sc.candidate.description,
+            "cv_score_mean":    sc.cv_score_mean,
+            "cv_score_se":      sc.cv_score_se,
+            "n_participants":   n_part,
+            "predicate_status": sc.candidate.predicate_status,
+            "sweetpea_code":    sc.candidate.sweetpea_code,
+            "compute_code":     sc.candidate.compute_code,
         })
 
     for c in result.hard_rejected_in_round:
@@ -82,12 +93,47 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "factor_type":      c.factor_type,
             "levels":           c.levels,
             "rejection_reason": c.rejection_reason,
+            "predicate_status": c.predicate_status,
+            "sweetpea_code":    c.sweetpea_code,
+            "compute_code":     c.compute_code,
         })
 
     log_path = Path(output_dir) / f"round_{result.round_num:02d}_candidates.json"
     log_path.write_text(json.dumps(log, indent=2))
     print(f"\n  Round {result.round_num} log → {log_path}")
 
+
+def _save_effect_log(result: EffectSearchResult, output_dir: str) -> None:
+    """Serialise an EffectSearchResult to JSON."""
+    log: dict = {
+        "round":            result.round_num,
+        "n_accepted":       len(result.accepted_effects),
+        "accepted_effects": [],
+        "all_tested":       [],
+    }
+    for e in result.accepted_effects:
+        log["accepted_effects"].append({
+            "term":                   e.term,
+            "factor_names":           e.factor_names,
+            "cv_score_mean":          e.cv_score_mean,
+            "cv_score_se":            e.cv_score_se,
+            "n_participants":         e.n_participants,
+            "validation_improvement": e.validation_improvement,
+            "source":                 e.source,
+            "llm_rationale":          e.llm_rationale,
+        })
+    for t in result.all_tested:
+        log["all_tested"].append({
+            "factor_names":    t.factor_names,
+            "term":            t.term,
+            "formula_hash":    t.formula_hash,
+            "cv_score_mean":   t.cv_score_mean,
+            "cv_score_se":     t.cv_score_se,
+            "outcome":         t.outcome,
+        })
+    log_path = Path(output_dir) / f"round_{result.round_num:02d}_effects.json"
+    log_path.write_text(json.dumps(log, indent=2))
+    print(f"  Round {result.round_num} effect log → {log_path}")
 
 
 def run_discovery_pipeline(
@@ -119,6 +165,14 @@ def run_discovery_pipeline(
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
+    # Build search strategies (once; reused across all rounds)
+    # ------------------------------------------------------------------
+    seeder  = build_seeding_strategy(config, llm)
+    evolver = build_evolution_strategy(config, llm)
+    print(f"\n  Seeding strategy  : {disc_cfg.seeding_strategy.type}")
+    print(f"  Evolution strategy: {disc_cfg.evolution_strategy.type}")
+
+    # ------------------------------------------------------------------
     # One-time participant split (fixed across all rounds)
     # ------------------------------------------------------------------
     search_df, validation_df = split_participants(
@@ -138,6 +192,17 @@ def run_discovery_pipeline(
 
     observable_cols = list(observable_df.columns)
 
+    # Build per-benchmark context strings injected into every LLM prompt
+    task_context = config.task_context.strip()
+    observable_descriptions: dict = {}
+    for bf in config.base_factors:
+        if bf.dtype == "categorical" and bf.levels:
+            observable_descriptions[bf.name] = " | ".join(f'"{lv}"' for lv in bf.levels)
+        elif bf.dtype == "continuous":
+            observable_descriptions[bf.name] = "float (continuous)"
+    # outcome variable
+    observable_descriptions[config.outcome_variable] = "0 | 1"
+
     for round_num in range(1, disc_cfg.n_rounds + 1):
         print(f"\n{'='*60}")
         print(f"  Round {round_num} / {disc_cfg.n_rounds}")
@@ -153,9 +218,15 @@ def run_discovery_pipeline(
             registry=registry,
             round_num=round_num,
             observable_cols=observable_cols,
+            seeder=seeder,
+            evolver=evolver,
+            task_context=task_context,
+            observable_descriptions=observable_descriptions,
         )
 
         _save_round_log(result, output_dir)
+
+        new_factor_name: Optional[str] = None
 
         if result.accepted:
             winner   = result.winner
@@ -174,7 +245,7 @@ def run_discovery_pipeline(
                 full_working_df[col_name] = full_series
             col_values_for_registry = full_series if full_series is not None else winner.column_values
 
-            formula_alt = build_extended_formula(registry.get_current_formula(), col_name)
+            formula_alt = build_extended_formula(registry.get_current_formula(), col_name, factor_class=winner.candidate.factor_class)
             discovered  = DiscoveredFactor(
                 candidate=winner.candidate,
                 column_name=col_name,
@@ -186,10 +257,26 @@ def run_discovery_pipeline(
                 validation_improvement=result.validation_improvement,
             )
             registry.register(discovered)
+            new_factor_name = col_name
             print(f"\n  ✓ '{col_name}' added to model. "
                   f"New formula: {registry.get_current_formula()}")
         else:
             print(f"\n  Round {round_num}: no factor accepted — baseline unchanged.")
+
+        # ------------------------------------------------------------------
+        # Phase 2: effect search (interaction terms)
+        # ------------------------------------------------------------------
+        if config.discovery.run_effect_search:
+            effect_result = run_effect_search(
+                search_df=search_df,
+                validation_df=validation_df,
+                config=config,
+                llm=llm,
+                registry=registry,
+                round_num=round_num,
+                new_factor_name=new_factor_name,
+            )
+            _save_effect_log(effect_result, output_dir)
 
     print(f"\n{'='*60}")
     print(f"  Discovery complete.")

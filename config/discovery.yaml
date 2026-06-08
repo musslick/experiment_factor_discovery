@@ -1,0 +1,119 @@
+# Top-level novel discovery run configuration.
+# List the dataset config files (mode: novel_discovery) to process.
+# All sections below are shared defaults merged into every dataset config.
+# A dataset config may override any individual field by re-specifying it.
+#
+# Usage: python run_discovery.py --config config/discovery.yaml
+
+datasets:
+  - config/empirical_stroop_congruency.yaml
+
+# ── Shared globals ────────────────────────────────────────────────────────────
+benchmark:
+  seed: 42           # global RNG seed; controls data split, CV folds, and random strategies
+  output_dir: "results"
+
+# ── Discovery ─────────────────────────────────────────────────────────────────
+discovery:
+  # ── Round structure ────────────────────────────────────────────────────────
+  n_rounds: 3                    # how many sequential discovery rounds to run; each round
+                                 # attempts to discover one new factor
+  max_search_iterations: 3       # CV iterations per round (seeding counts as iteration 0;
+                                 # evolver runs max_search_iterations - 1 times)
+
+  # ── Predicate synthesis ────────────────────────────────────────────────────
+  max_synthesis_retries: 2       # max LLM retry attempts when synthesised predicate fails
+                                 # validation; each retry includes the previous error message
+  sandbox_timeout_seconds: 10    # max seconds a predicate may run before being killed;
+                                 # increase for large datasets (>50k rows)
+  sandbox_backend: "subprocess"  # "subprocess" (default) or "docker" (requires llm-sandbox)
+  docker_image: "python:3.9-slim"# docker image used when sandbox_backend is "docker"
+
+  # ── Scoring / winner selection ─────────────────────────────────────────────
+  stability_weight: 1.0          # λ in adjusted_score = (mean − λ·se) / complexity;
+                                 # higher values penalise noisy candidates more strongly
+  complexity_exponent: 1.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
+                                 # continuous) in the complexity denominator; higher = stronger
+                                 # penalty for multi-level factors
+  depends_on_exponent: 0.5       # exponent on n_depends_on in the complexity denominator;
+                                 # higher = stronger penalty for factors with many parents
+  cv_n_folds: 5                  # number of cross-validation folds for candidate scoring
+  validation_fraction: 0.20      # fraction of participants held out for final winner validation;
+                                 # split is performed once before round 1 and reused
+  min_validation_improvement:    # minimum mean per-participant log-likelihood gain on the
+    0.001                        # held-out set required to accept a winner
+
+  # ── Decomposition check ────────────────────────────────────────────────────
+  decomposition_check_enabled: true   # reject candidates that are bijections or coarsenings
+                                      # of already-discovered factors
+  decomposition_check_max_arity: 2    # maximum number of existing factors to consider jointly
+                                      # when checking for coarsening (1 = pairwise only)
+
+  # ── Effect search (Phase 2 — interaction terms) ────────────────────────────
+  run_effect_search: true             # whether to run Phase 2 interaction-term search
+  max_interaction_order: 2            # maximum arity of interaction terms to test (2 = pairwise)
+  max_interactions_per_round: 1       # cap on interactions accepted per round
+  effect_search_full_pass: false      # if true, re-test all factor pairs every round regardless
+                                      # of whether a new factor was discovered
+  effect_search_full_pass_interval:   # run a full pass every N rounds (null = only on new factor)
+  effect_search_min_cv_improvement: 0.05         # minimum CV LL gain to shortlist an interaction
+  effect_search_min_validation_improvement: 0.001 # minimum validation LL gain to accept it
+  llm_rank_interactions: false        # if true, ask the LLM to rank shortlisted interactions
+                                      # before CV scoring (reduces API calls at the cost of bias)
+
+  # ── Factor space constraints ───────────────────────────────────────────────
+  allowed_factor_types: ["within_trial", "window"]  # "within_trial": single-trial predicates;
+                                                     # "window": sliding window over N trials
+  allowed_factor_classes: ["discrete"]  # "discrete" and/or "continuous"
+  max_window_width: 4                   # maximum window size for window-type factors
+
+  # ── Stagnation detection ───────────────────────────────────────────────────
+  stagnation_epsilon: 0.001  # rounds where winner CV gain < epsilon count as stagnant
+  stagnation_patience: 0     # stop early after this many consecutive stagnant rounds (0 = off)
+
+  # ── Seeding strategy ───────────────────────────────────────────────────────
+  seeding_strategy:
+    type: "random"           # "llm": LLM proposes candidates from scratch each round;
+                             # "random": random combinatorial enumeration from factor templates;
+                             # "mixed": blend of both (configure via components list)
+    n_candidates: 50        # number of seed candidates generated at the start of each round
+    seed_multiplier: 1.0     # scales n_candidates for round 1 only (larger first round)
+    template_bias: "uniform" # how templates are sampled: "uniform" or "complexity" (biases
+                             # toward simpler factor templates)
+    max_depends_on: 3        # maximum number of parent factors a candidate may depend on
+    max_output_levels: 3     # maximum number of distinct output levels for discrete factors
+    max_table_size: 128      # maximum number of rows in the lookup table for derived factors
+    allow_window: true       # whether window-type candidates are generated during seeding
+
+  # ── Evolution strategy ─────────────────────────────────────────────────────
+  evolution_strategy:
+    type: "llm_genetic"      # "llm": LLM proposes refinements from scratch;
+                             # "llm_genetic": genetic operators (mutation/crossover/repair/novel)
+                             # applied by the LLM given the top-k scored candidates;
+                             # "mixed": blend (configure via components list)
+    n_candidates: 5          # candidates produced per evolution iteration
+    top_k: 3                 # number of top-scoring candidates from the previous iteration
+                             # shown to the LLM as parents
+    n_elite: 5               # top-k candidates carried forward unchanged each iteration
+    n_tournament_parents: 3  # parents sampled for tournament selection in crossover
+    n_diversity_parents: 1   # parents drawn uniformly to maintain population diversity
+    operator_mix:            # probability mass assigned to each genetic operator
+      mutation: 0.40         # tweak one aspect of a parent candidate
+      crossover: 0.30        # combine aspects of two parent candidates
+      repair: 0.20           # fix a parent that failed predicate synthesis
+      novel: 0.10            # propose an entirely new candidate (exploration)
+    diversity_threshold: 0.1 # candidates whose level-set overlap with an existing candidate
+                             # exceeds this threshold are filtered out before scoring
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+llm:
+  model: "claude-sonnet-4-6"      # Anthropic model ID used for all LLM calls
+  max_tokens_candidate: 2000      # token budget for candidate generation / evolution responses
+  max_tokens_predicate: 1000      # token budget for predicate synthesis responses
+  candidate_temperature: 0.9      # sampling temperature for candidate generation (higher = more diverse)
+  predicate_temperature: 0.2      # sampling temperature for predicate synthesis (lower = more deterministic)
+
+# ── Statistical ───────────────────────────────────────────────────────────────
+statistical:
+  min_level_count: 5   # minimum number of occurrences required for each factor level;
+                       # candidates where any level falls below this count are hard-rejected

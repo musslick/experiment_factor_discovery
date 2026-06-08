@@ -7,3 +7,4 @@ __pycache__/
 data/ground_truth/
 data/input/
 results/
+.vscode/launch.json

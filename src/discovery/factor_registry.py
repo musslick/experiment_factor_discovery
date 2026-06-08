@@ -7,12 +7,20 @@ EvaluatedCandidate – a factor that passed screening and received a CV score bu
                      and may be re-proposed in a later round.
 DiscoveredFactor   – a candidate that passed CV scoring, was selected as winner,
                      and passed held-out validation.
-FactorRegistry     – accumulates all three; maintains the evolving baseline formula.
+DiscoveredEffect   – an interaction term accepted by the effect search phase
+                     (Phase 2 of each round).  Stored as a formula extension,
+                     not as a new column.
+TestedInteraction  – audit record for every interaction pair evaluated by the
+                     effect search, keyed to the formula state at test time.
+FactorRegistry     – accumulates all of the above; maintains the evolving
+                     baseline formula.
 
 Rejection taxonomy
 ------------------
-hard_rejected : synthesis failure, sandbox crash, encoding failure, or exact
-                duplicate of an already-discovered factor.  Permanently banned —
+hard_rejected : synthesis failure, sandbox crash, encoding failure, exact
+                duplicate of an already-discovered factor, OR a candidate
+                that is an exact relabeling of a Cartesian product of
+                simpler discovered factors.  Permanently banned —
                 shown to the LLM as off-limits.
 evaluated_candidates : valid, CV-scored candidates that were not selected as
                 winner in their round.  NOT permanently banned — a later round
@@ -21,9 +29,10 @@ low_scoring_candidates (property) : subset of evaluated_candidates whose mean
                 CV score is <= 0 (no marginal improvement detected).
 """
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -36,9 +45,12 @@ import pandas as pd
 class CandidateFactor:
     name: str
     description: str
-    factor_type: str          # "within_trial" | "transition"
+    factor_type: str          # "within_trial" | "window"
     levels: List[str]
     depends_on: List[str]
+    factor_class: str = "discrete"   # "discrete" | "continuous"
+    window_width: int = 2            # only meaningful when factor_type == "window"
+    window_stride: int = 1           # only meaningful when factor_type == "window"
     round_num: int = 0
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     compute_code: Optional[str] = None    # compute_factor function (for sandbox)
@@ -47,6 +59,7 @@ class CandidateFactor:
     lrt_pvalue: Optional[float] = None
     accepted: bool = False
     rejection_reason: Optional[str] = None
+    coarsening_of: Optional[List[str]] = None  # set when candidate is a coarsening of a Cartesian product
 
 
 @dataclass
@@ -69,6 +82,47 @@ class DiscoveredFactor:
     formula_with: str           # alternative model formula that detected this factor
     validation_improvement: Optional[float] = None  # mean per-participant LL gain on held-out set
 
+    @property
+    def is_continuous(self) -> bool:
+        return self.candidate.factor_class == "continuous"
+
+
+@dataclass
+class DiscoveredEffect:
+    """
+    An interaction term accepted by the effect search phase (Phase 2).
+    Stored as a formula extension; no new column is synthesized.
+    """
+    term: str                     # e.g. "C(congruency):C(previous_congruency)"
+    factor_names: List[str]       # e.g. ["congruency", "previous_congruency"], always sorted
+    effect_type: str              # "interaction"
+    effect_order: int             # 2 for pairwise, 3 for triple
+    cv_score_mean: float
+    cv_score_se: float
+    n_participants: int
+    validation_improvement: float
+    round_num: int
+    formula_with: str             # cumulative formula after adding this term
+    source: str                   # "effect_search" | "decomposition_check_referral"
+    llm_rationale: Optional[str] = None
+
+
+@dataclass
+class TestedInteraction:
+    """
+    Audit record for every interaction pair evaluated by the effect search.
+    Keyed to the formula state at test time so that stale rejections are not
+    re-used once the model changes.
+    """
+    factor_names: List[str]       # always sorted
+    term: str
+    formula_hash: str             # hash of the formula at test time
+    formula_snapshot: str         # the actual formula string (for debugging)
+    cv_score_mean: Optional[float]
+    cv_score_se: Optional[float]
+    outcome: str                  # "accepted" | "below_cv_threshold" | "failed_validation" | "skipped"
+    round_num: int
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -85,6 +139,10 @@ class FactorRegistry:
         self.hard_rejected: List[CandidateFactor] = []
         self.evaluated_candidates: List[EvaluatedCandidate] = []
         self.baseline_formula: str = baseline_formula
+        # Interaction effect tracking (Phase 2)
+        self.discovered_effects: List[DiscoveredEffect] = []
+        self.tested_interactions: List[TestedInteraction] = []
+        self.pending_interactions: List[Tuple[str, str]] = []
 
     # --- mutation ---
 
@@ -93,10 +151,16 @@ class FactorRegistry:
         self.discovered.append(factor)
         self.baseline_formula = factor.formula_with
 
+    def register_effect(self, effect: DiscoveredEffect) -> None:
+        """Accept an interaction effect and advance the baseline formula."""
+        self.discovered_effects.append(effect)
+        self.baseline_formula = effect.formula_with
+
     def hard_reject(self, candidate: CandidateFactor, reason: str) -> None:
         """
         Permanently ban a candidate (synthesis failure, sandbox crash, encoding
-        failure, or duplicate).  Shown to the LLM as permanently off-limits.
+        failure, duplicate, or exact interaction relabeling).  Shown to the LLM
+        as permanently off-limits.
         """
         candidate.accepted = False
         candidate.rejection_reason = reason
@@ -125,7 +189,60 @@ class FactorRegistry:
             )
         )
 
+    def queue_pending_interaction(self, f_i_name: str, f_j_name: str) -> None:
+        """
+        Queue an interaction pair discovered via the decomposition check.
+        These become Tier 2 candidates in the next Phase 2 run.
+        """
+        pair: Tuple[str, str] = tuple(sorted([f_i_name, f_j_name]))  # type: ignore[assignment]
+        if pair not in self.pending_interactions:
+            self.pending_interactions.append(pair)
+
+    def record_interaction_test(
+        self,
+        factor_names: List[str],
+        term: str,
+        formula_hash: str,
+        formula_snapshot: str,
+        cv_score_mean: Optional[float],
+        cv_score_se: Optional[float],
+        outcome: str,
+        round_num: int,
+    ) -> None:
+        """Record an interaction evaluation (accepted or not)."""
+        self.tested_interactions.append(
+            TestedInteraction(
+                factor_names=sorted(factor_names),
+                term=term,
+                formula_hash=formula_hash,
+                formula_snapshot=formula_snapshot,
+                cv_score_mean=cv_score_mean,
+                cv_score_se=cv_score_se,
+                outcome=outcome,
+                round_num=round_num,
+            )
+        )
+
     # --- queries ---
+
+    def current_formula_hash(self) -> str:
+        return hashlib.md5(self.baseline_formula.encode()).hexdigest()[:12]
+
+    def is_interaction_accepted(self, factor_names: List[str]) -> bool:
+        key = tuple(sorted(factor_names))
+        return any(tuple(sorted(e.factor_names)) == key for e in self.discovered_effects)
+
+    def is_interaction_tested_under_current_formula(self, factor_names: List[str]) -> bool:
+        """
+        True only if this pair was evaluated under the CURRENT formula state.
+        A stale rejection (from a different formula) does not count.
+        """
+        key = tuple(sorted(factor_names))
+        current_hash = self.current_formula_hash()
+        return any(
+            tuple(sorted(t.factor_names)) == key and t.formula_hash == current_hash
+            for t in self.tested_interactions
+        )
 
     @property
     def low_scoring_candidates(self) -> List[EvaluatedCandidate]:
@@ -136,6 +253,14 @@ class FactorRegistry:
     def rejected(self) -> List[CandidateFactor]:
         """Backward-compatible access to hard_rejected."""
         return self.hard_rejected
+
+    def get_discrete_discovered(self) -> List[DiscoveredFactor]:
+        """Return only discrete discovered factors."""
+        return [f for f in self.discovered if f.candidate.factor_class == "discrete"]
+
+    def get_continuous_discovered(self) -> List[DiscoveredFactor]:
+        """Return only continuous discovered factors."""
+        return [f for f in self.discovered if f.candidate.factor_class == "continuous"]
 
     def get_current_formula(self) -> str:
         return self.baseline_formula

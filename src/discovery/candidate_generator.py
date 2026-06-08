@@ -7,7 +7,7 @@ previously rejected candidates).
 import json
 import re
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from src.discovery.llm_client import LLMClient
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor
@@ -26,15 +26,18 @@ def _fill(template: str, **subs: str) -> str:
     return template
 
 
-def _format_observable(factor_names: List[str]) -> str:
-    desc = {
-        "task":           '"color_naming" | "word_reading"',
-        "color":          '"red" | "blue" | "green"',
-        "word":           '"red" | "blue" | "green"',
-        "correct":        "0 | 1",
-        "participant_id": "int",
-        "trial_index":    "int",
-    }
+def _format_observable(factor_names: List[str],
+                        descriptions: Optional[dict] = None) -> str:
+    """
+    Format the observable factor list for the LLM prompt.
+
+    Parameters
+    ----------
+    factor_names  : ordered list of column names.
+    descriptions  : mapping name → description string.  When supplied, used
+                    instead of the built-in Stroop-specific fallback.
+    """
+    desc = descriptions or {}
     lines = []
     for name in factor_names:
         if name in desc:
@@ -49,11 +52,20 @@ def _format_discovered(discovered: List[DiscoveredFactor]) -> str:
         return "  (none yet)"
     lines = []
     for d in discovered:
-        levels_str = ", ".join(f'"{lv}"' for lv in d.candidate.levels)
-        lines.append(
-            f"  {d.column_name} ({d.candidate.factor_type}): "
-            f"levels=[{levels_str}] — {d.candidate.description}"
-        )
+        if d.candidate.factor_class == "continuous":
+            lines.append(
+                f"  {d.column_name} ({d.candidate.factor_type}, continuous): "
+                f"returns float — {d.candidate.description}"
+            )
+        else:
+            levels_str = ", ".join(f'"{lv}"' for lv in d.candidate.levels)
+            type_str = d.candidate.factor_type
+            if d.candidate.factor_type == "window":
+                type_str += f" width={d.candidate.window_width}"
+            lines.append(
+                f"  {d.column_name} ({type_str}, discrete): "
+                f"levels=[{levels_str}] — {d.candidate.description}"
+            )
     return "\n".join(lines)
 
 
@@ -96,7 +108,9 @@ def _parse_candidates(raw: str, round_num: int) -> List[CandidateFactor]:
                     name=str(item["name"]).strip(),
                     description=str(item.get("description", "")).strip(),
                     factor_type=str(item["factor_type"]).strip(),
-                    levels=[str(lv).strip() for lv in item["levels"]],
+                    factor_class=str(item.get("factor_class", "discrete")).strip(),
+                    window_width=int(item.get("window_width") or 2),
+                    levels=[str(lv).strip() for lv in item.get("levels", [])],
                     depends_on=[str(d).strip() for d in item.get("depends_on", [])],
                     round_num=round_num,
                 )
@@ -131,7 +145,7 @@ def _format_scored_candidates(scored_candidates: list, top_k: int):
     for rank, sc in enumerate(sorted_sc, 1):
         levels_str = ", ".join(f'"{lv}"' for lv in sc.candidate.levels)
         all_lines.append(
-            f"  {rank}. {sc.candidate.name} ({sc.candidate.factor_type})"
+            f"  {rank}. {sc.candidate.name} ({sc.candidate.factor_type}, {sc.candidate.factor_class})"
             f" | levels=[{levels_str}]"
             f" | cv_mean={sc.cv_score.mean_ll_improvement:.4f}"
             f" ± se={sc.cv_score.se_ll_improvement:.4f}"
@@ -145,6 +159,7 @@ def _format_scored_candidates(scored_candidates: list, top_k: int):
             f"  {sc.candidate.name} ({sc.candidate.factor_type})"
             f"\n     Description : {sc.candidate.description}"
             f"\n     Levels      : [{levels_str}]"
+            f"\n     Factor class: {sc.candidate.factor_class}"
             f"\n     Depends on  : {sc.candidate.depends_on}"
             f"\n     CV score    : mean={sc.cv_score.mean_ll_improvement:.4f},"
             f" se={sc.cv_score.se_ll_improvement:.4f}"
@@ -158,7 +173,7 @@ def _format_scored_candidates(scored_candidates: list, top_k: int):
 
 def refine_candidates(
     llm: LLMClient,
-    scored_candidates: list,            # List[ScoredCandidate], accessed by duck typing
+    scored_candidates: list,
     hard_rejected: List[CandidateFactor],
     top_k: int,
     observable_factors: List[str],
@@ -168,13 +183,15 @@ def refine_candidates(
     n_to_generate: int,
     temperature: float,
     max_tokens: int = 2000,
+    max_window_width: int = 5,
+    task_context: str = "",
+    observable_descriptions: Optional[Dict[str, str]] = None,
 ) -> List[CandidateFactor]:
     """
     Ask the LLM to propose refined or alternative candidates based on CV scores.
 
-    Only hard_rejected factors are shown as permanently banned; soft-rejected
-    (low-scoring) candidates from earlier rounds are not blocked and may be
-    refined or reintroduced with a different predicate structure.
+    Only hard_rejected factors are permanently banned; soft-rejected candidates
+    from earlier rounds may be refined or reintroduced.
     """
     system = _load("candidate_refinement_system.txt")
     user_template = _load("candidate_refinement_user.txt")
@@ -183,7 +200,8 @@ def refine_candidates(
 
     user = _fill(
         user_template,
-        observable_factors=_format_observable(observable_factors),
+        task_context=task_context.strip(),
+        observable_factors=_format_observable(observable_factors, observable_descriptions),
         discovered_factors=_format_discovered(discovered_so_far),
         hard_rejected_factors=_format_rejected(hard_rejected),
         scored_candidates=scored_str,
@@ -191,6 +209,7 @@ def refine_candidates(
         iteration=str(iteration_num),
         round_num=str(round_num),
         n_to_generate=str(n_to_generate),
+        max_window_width=str(max_window_width),
     )
 
     raw = llm.complete(system=system, user=user,
@@ -212,22 +231,26 @@ def generate_candidates(
     max_candidates: int,
     temperature: float,
     max_tokens: int = 2000,
+    max_window_width: int = 5,
+    task_context: str = "",
+    observable_descriptions: Optional[Dict[str, str]] = None,
 ) -> List[CandidateFactor]:
     """
     Ask the LLM to propose up to max_candidates new derived factor candidates.
 
-    Returns a list of CandidateFactor objects (may be empty if the LLM response
-    could not be parsed).
+    Returns a list of CandidateFactor objects (may be empty on parse error).
     """
     system = _load("candidate_generation_system.txt")
     user_template = _load("candidate_generation_user.txt")
 
     user = _fill(
         user_template,
-        observable_factors=_format_observable(observable_factors),
+        task_context=task_context.strip(),
+        observable_factors=_format_observable(observable_factors, observable_descriptions),
         discovered_factors=_format_discovered(discovered_so_far),
         rejected_factors=_format_rejected(rejected_so_far),
         max_candidates=str(max_candidates),
+        max_window_width=str(max_window_width),
     )
 
     raw = llm.complete(system=system, user=user,

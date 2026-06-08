@@ -1,0 +1,51 @@
+benchmark:
+  name: "stroop_simon_factor_discovery"
+  type: "stroop_simon"
+
+data_generation:
+  n_participants: 100
+  n_blocks_per_participant: 8    # 8 × 27 trials = 216 trials per participant
+  outcome_variable: "correct"
+  task_context: |
+    This is a Stroop–Simon task. On each trial, a colour word is presented at one
+    of three screen locations. Participants must respond only to the ink colour of
+    the word and ignore both the word meaning and the stimulus location.
+    Response mapping: red ink → left key, blue ink → middle key, green ink → right key.
+    The correct response is therefore fully determined by the ink colour.
+    Accuracy (correct / incorrect) is the outcome to be predicted.
+  base_factors:
+    - {name: word,              dtype: categorical, levels: [red, blue, green]}
+    - {name: color,             dtype: categorical, levels: [red, blue, green]}
+    - {name: stimulus_location, dtype: categorical, levels: [left, middle, right]}
+    - {name: correct_response,  dtype: categorical, levels: [left, middle, right], include_in_formula: false}
+  hidden_factors:
+    - "word_color_congruency"
+    - "location_response_congruency"
+    - "congruency_previous_trial"
+    - "response_transition"
+  logistic_model:
+    intercept: 0.5
+    terms:
+      - {factor: word_color_congruency,        level: congruent, coefficient:  0.8}
+      - {factor: location_response_congruency, level: congruent, coefficient:  0.6}
+      - {factor: congruency_previous_trial,    level: congruent, coefficient:  0.3}
+      - {factor: response_transition,          level: repeat,    coefficient:  0.2}
+
+evaluation:
+  ground_truth_factors:
+    - name: "word_color_congruency"
+      type: "within_trial"
+      factor_class: "discrete"
+      levels: ["congruent", "incongruent"]
+    - name: "location_response_congruency"
+      type: "within_trial"
+      factor_class: "discrete"
+      levels: ["congruent", "incongruent"]
+    - name: "congruency_previous_trial"
+      type: "transition"
+      factor_class: "discrete"
+      levels: ["congruent", "incongruent"]
+    - name: "response_transition"
+      type: "transition"
+      factor_class: "discrete"
+      levels: ["repeat", "switch"]
