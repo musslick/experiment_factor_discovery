@@ -101,16 +101,16 @@ task_transition = Factor("task_transition", [
 # (Additional hidden factors defined analogously; omitted in 2-factor prototype)
 
 # Crossing only over observable factors; derived factors ride along
-block = fully_cross_block(
-    design   = [task, color, word, congruency, task_transition],
-    crossing = [task, color, word],
+block = CrossBlock(
+    design      = [task, color, word, congruency, task_transition],
+    crossing    = [task, color, word],
     constraints = [],
 )
-experiments = synthesize_trials(block, samples=n_participants,
-                                sampling_strategy=UniformCombinatoricSamplingStrategy)
+experiments = synthesize_trials(block, samples=n_participants * n_blocks_per_participant,
+                                sampling_strategy=RandomGen)
 ```
 
-SweetPea outputs a dataset that already contains all factor columns, with transition-factor values correctly set to `NaN` for the first trial in each synthesized sequence. This yields a base block of 18 trials (2 × 3 × 3), repeated to reach approximately 200 trials per participant across 30 participants.
+SweetPea outputs a dataset that already contains all factor columns, with transition-factor values correctly set to `NaN` (empty string replaced post-hoc) for the first trial of each block. This yields a base block of 18 trials (2 × 3 × 3), repeated across 11 blocks per participant to reach approximately 198 trials per participant across 100 participants.
 
 **Step 2: Dataset masking**
 
@@ -264,31 +264,67 @@ Two backends are supported (selectable via config):
 
 Any validation failure or timeout triggers the self-correction loop in §5.2.
 
-### 5.4 Nested Logistic Regression Model Comparison
+### 5.4 Candidate Scoring via Cross-Validated Logistic Regression
+
+Rather than a single likelihood ratio test on the full dataset, the pipeline uses **participant-wise cross-validated scoring** to rank candidates fairly and avoid overfitting.
 
 **Formula structure**: Uses `statsmodels.formula.api.logit` with `patsy` formula strings.
 
 - Binary factors (2 levels): Encoded as float 0/1 column. One parameter added to the model.
-- Multi-level factors (≥3 levels): Encoded with `C(factor_name)` treatment contrasts. `L-1` parameters added.
+- Multi-level factors (≥ 3 levels): Encoded with `C(factor_name)` treatment contrasts. `L−1` parameters added.
 
-**Shared NaN mask**: Both null and alternative models are fit on the intersection of non-NaN rows across all columns referenced by either formula. This ensures the LRT degrees-of-freedom comparison is valid.
+**Shared NaN mask**: Both null and alternative models are fit on the intersection of non-NaN rows, ensuring valid degrees-of-freedom comparison.
 
-**LRT computation**:
+**CV scoring** (`cv_n_folds = 5`, participant-wise folds on the search set):
 ```
-statistic = −2 × (LLF_null − LLF_alt)
-df        = n_params_alt − n_params_null
-p-value   = chi2.sf(statistic, df=df)
+For each fold:
+    Fit null model on training participants
+    Fit alternative model on training participants
+    Compute per-trial log-likelihood improvement on held-out participants
+    Average across held-out trials → per-participant LL improvement
+Result: CVScore(mean_ll_improvement, se_ll_improvement, n_participants)
 ```
 
-**Separation detection**: If the alternative model fails to converge and any coefficient has `|z| > 10`, the candidate is rejected with `rejection_reason = "separation_detected"` rather than crashing.
+**Winner selection**: Candidates are ranked by a complexity-adjusted score:
+```
+adjusted_score = (mean_ll_improvement − λ · se_ll_improvement)
+                 / ((n_levels − 1)^complexity_exp · n_depends_on^depends_on_exp)
+```
+where `λ` (`stability_weight`) penalises high cross-fold variance, and the denominator normalises by model complexity and the number of input factors.
+
+**Validation**: The round winner is evaluated once on the fixed held-out validation set (20 % of participants). It is accepted if:
+```
+mean per-participant LL gain ≥ min_validation_improvement
+```
 
 **Formula progression across rounds:**
 ```
-Start:           null = "correct ~ 1"
-After round 1:   null = "correct ~ congruency"      (if congruency discovered)
-After round 2:   null = "correct ~ congruency + task_transition"
+Start:           null = "correct ~ C(task) + C(color) + C(word)"
+After round 1:   null = "correct ~ C(task) + C(color) + C(word) + congruency"
+After round 2:   null = "correct ~ C(task) + C(color) + C(word) + congruency + task_transition"
 ```
-Each newly discovered factor is added to the null model for all subsequent comparisons.
+Each accepted factor is added to the null formula for all subsequent rounds.
+
+### 5.5 Iterative Within-Round Refinement
+
+After the initial batch of candidates is scored, the pipeline feeds the CV results back to the LLM:
+
+1. The top-`k` candidates (by adjusted score) are highlighted.
+2. The LLM proposes a new batch of `candidates_per_refinement` refined or alternative candidates.
+3. New candidates go through the same synthesis → encoding → CV-scoring pipeline.
+4. This generate → score → refine cycle repeats for up to `max_search_iterations` iterations.
+
+Only hard-rejected candidates (sandbox failure) are permanently banned. Candidates that were CV-scored but did not win in a previous round are free to be re-proposed in later rounds, where the updated null formula may reveal their marginal value.
+
+### 5.6 Interaction Effect Search (Phase 2)
+
+After each round's winner is registered, the pipeline optionally searches for interaction terms among the discovered factors:
+
+1. Candidate interaction terms (pairwise products of discovered factor columns) are generated.
+2. Each is CV-scored on the same search/validation split.
+3. Interactions above `effect_search_min_cv_improvement` are validated on the held-out set.
+4. Up to `max_interactions_per_round` accepted interactions are added to the formula.
+5. If `llm_rank_interactions` is enabled, the LLM annotates and ranks candidates before testing.
 
 ---
 
@@ -340,30 +376,37 @@ experimental_design_search/
 │   │   ├── sweetpea_builder.py        # SweetPea design (all factors) + trial sequence generation
 │   │   └── stroop_model.py            # Accuracy sampling from ground-truth logistic model
 │   ├── discovery/
-│   │   ├── pipeline.py                # Discovery loop orchestration
+│   │   ├── pipeline.py                # Multi-round discovery orchestration
+│   │   ├── within_round_search.py     # Iterative generate→score→refine loop per round
+│   │   ├── effect_searcher.py         # Interaction term discovery (Phase 2)
 │   │   ├── llm_client.py              # Anthropic SDK wrapper with retry
-│   │   ├── candidate_generator.py     # LLM → structured factor proposals
-│   │   ├── predicate_synthesizer.py   # LLM → Python predicate code
+│   │   ├── candidate_generator.py     # LLM → structured factor proposals + refinement
+│   │   ├── predicate_synthesizer.py   # LLM → Python predicate code + self-correction
 │   │   ├── sandbox.py                 # Subprocess/Docker sandboxed execution
 │   │   └── factor_registry.py         # Tracks accepted/rejected factors, manages formula
 │   ├── analysis/
 │   │   ├── factor_encoder.py          # Predicate output → pandas Series
-│   │   ├── model_comparison.py        # Logistic regression + LRT
+│   │   ├── model_comparison.py        # Logistic CV scoring, formula building
 │   │   └── evaluation.py              # Bijection matching + P/R/F1
 │   └── utils/
-│       ├── config.py                  # YAML loader + dataclass validation
-│       └── logging_utils.py           # Structured JSON logging
+│       └── config.py                  # YAML loader + dataclass validation
 ├── prompts/
 │   ├── candidate_generation_system.txt
 │   ├── candidate_generation_user.txt
+│   ├── candidate_refinement_system.txt  # Iterative refinement based on CV scores
+│   ├── candidate_refinement_user.txt
+│   ├── effect_ranking_system.txt        # LLM ranking of interaction candidates
+│   ├── effect_ranking_user.txt
 │   ├── predicate_synthesis_system.txt
 │   └── predicate_synthesis_user.txt
 ├── results/
 │   └── run_{timestamp}/
-│       ├── discovered_factors.json
-│       ├── round_{k}_candidates.json
+│       ├── round_{k}_candidates.json    # Per-round candidate scores and outcome
+│       ├── round_{k}_effects.json       # Per-round interaction effect results
 │       └── evaluation_report.json
-├── run_benchmark.py                   # CLI: python run_benchmark.py --config config/stroop_benchmark.yaml
+├── generate_data.py                   # Data generation CLI
+├── run_benchmark.py                   # CLI: python run_benchmark.py --config ...
+├── run_llm_test.py                    # LLM smoke test script
 ├── requirements.txt
 └── research_plan.md                   # This document
 ```
@@ -381,44 +424,65 @@ benchmark:
   output_dir: "results"
 
 data_generation:
-  n_participants: 30
-  n_trials_per_participant: 18        # one fully-crossed block (2×3×3)
-  target_trials_per_participant: 198  # repeated to reach ~200 trials
+  n_participants: 100
+  n_blocks_per_participant: 11        # 11 × 18 trials = 198 trials per participant
+  hidden_factors:
+    - "congruency"
+    - "task_transition"
   logistic_model:
     intercept: 0.5
-    congruent: 0.8
-    task_repeat: 0.4
-    response_repeat: 0.3
-    congruency_sequence: {cc: 0.2, ci: -0.3, ic: 0.1, ii: 0.0}
+    congruent: 0.8                    # Stroop congruency effect
+    task_repeat: 0.4                  # task switch cost
+    response_repeat: 0.0              # not used in 2-factor prototype
+    congruency_sequence: {}           # not used in 2-factor prototype
 
 discovery:
-  n_rounds: 4
-  max_candidates_per_round: 8
-  max_synthesis_retries: 3
+  n_rounds: 2
+  max_candidates_per_round: 5        # candidates generated in the first iteration
+  max_synthesis_retries: 2
   sandbox_timeout_seconds: 10
-  sandbox_backend: "docker"           # "docker" | "subprocess"
+  sandbox_backend: "subprocess"      # "subprocess" (default) | "docker"
   docker_image: "python:3.9-slim"
+  # iterative within-round search
+  candidates_per_refinement: 5       # candidates generated per refinement call
+  max_search_iterations: 3           # total generate→score→refine cycles per round
+  refinement_top_k: 3                # top candidates highlighted to LLM for refinement
+  stability_weight: 1.0              # λ: penalises high SE in winner selection
+  complexity_exponent: 1.0           # exponent on n_params=(n_levels−1) in score denominator
+  depends_on_exponent: 0.5           # exponent on n_deps=len(depends_on) in score denominator
+  cv_n_folds: 5
+  validation_fraction: 0.20
+  min_validation_improvement: 0.001  # minimum mean per-participant LL gain to accept
+  # decomposition check
+  decomposition_check_enabled: true
+  decomposition_check_max_arity: 2
+  # effect search (Phase 2)
+  run_effect_search: true
+  max_interaction_order: 2
+  max_interactions_per_round: 1
+  effect_search_min_cv_improvement: 0.05
+  effect_search_min_validation_improvement: 0.001
+  llm_rank_interactions: false
 
 llm:
-  model: "claude-sonnet-4-6"          # configurable; use claude-opus-4-8 for max capability
+  model: "claude-sonnet-4-6"         # configurable; use claude-opus-4-8 for max capability
   max_tokens_candidate: 2000
   max_tokens_predicate: 1000
   candidate_temperature: 0.9
   predicate_temperature: 0.2
 
 statistical:
-  alpha: 0.05
-  min_level_count: 5
-  separation_check: true
+  min_level_count: 5                 # guards against near-constant factors
 
 evaluation:
   ground_truth_factors:
-    - {name: congruency,           type: within_trial, levels: [congruent, incongruent]}
-    - {name: task_transition,      type: transition,   levels: [repeat, switch]}
+    - {name: congruency,       type: within_trial, levels: [congruent, incongruent]}
+    - {name: task_transition,  type: transition,   levels: [repeat, switch]}
     # Uncomment to extend to full benchmark:
-    # - {name: response_transition,  type: transition,   levels: [repeat, switch]}
-    # - {name: congruency_sequence,  type: transition,   levels: [cc, ci, ic, ii]}
+    # - {name: response_transition, type: transition, levels: [repeat, switch]}
+    # - {name: congruency_sequence, type: transition, levels: [cc, ci, ic, ii]}
   bijection_threshold: 0.95
+  ground_truth_interactions: []      # no interactions in the 2-factor prototype model
 ```
 
 ---
@@ -455,8 +519,8 @@ python run_benchmark.py --config config/stroop_benchmark.yaml
 ## 11. Expected Results and Evaluation Criteria
 
 **Success criteria (2-factor prototype):**
-- Recall = 1.0: both `congruency` and `task_transition` discovered within 4 rounds
-- Precision = 1.0: no false positives (only factors that genuinely improve model fit are registered)
+- Recall = 1.0: both `congruency` and `task_transition` discovered within 2 rounds
+- Precision = 1.0: no false positives (only factors that genuinely improve the held-out LL are registered)
 - F1 = 1.0
 
 **Partial success indicators:**
@@ -485,7 +549,7 @@ python run_benchmark.py --config config/stroop_benchmark.yaml
 | Experiment design language | SweetPea | Declarative, maps directly to predicate synthesis; established in cognitive science |
 | LLM for synthesis | Claude (Anthropic API) | Strong code generation; configurable per run |
 | Sandbox | Docker via llm-sandbox | Security isolation for LLM-generated code; subprocess fallback for convenience |
-| Statistical test | Logistic LRT | Appropriate for binary outcomes (accuracy); nested model comparison is principled and interpretable |
+| Statistical scoring | Participant-wise CV logistic regression | Avoids overfitting; marginal LL improvement is interpretable; complexity-adjusted winner selection controls for spurious multi-level factors |
 | Factor matching | Bijection via Hungarian algorithm | Handles arbitrary LLM level naming; exact matching with configurable tolerance |
 | Trial generation | UniformCombinatoricSamplingStrategy | No Docker SAT server required; fully local and reproducible |
 | Prototyping scope | 2 hidden factors | Enables rapid end-to-end validation before scaling to full complexity |
@@ -514,7 +578,7 @@ Declarative language for factorial experiment design. Used for generating counte
 - **API reference**: https://sweetpea-org.github.io/api/sweetpea.html
 - **Factor & derivation guide**: https://sweetpea-org.github.io/guide/factorial_design.html
 
-Key classes: `Factor`, `DerivedLevel`, `WithinTrial`, `Transition`, `fully_cross_block`, `synthesize_trials`, `UniformCombinatoricSamplingStrategy`.
+Key classes: `Factor`, `DerivedLevel`, `WithinTrial`, `Transition`, `CrossBlock`, `synthesize_trials`, `RandomGen`.
 
 ### LLM Sandbox (`llm-sandbox`)
 Docker-based sandboxed execution environment for running LLM-generated Python code safely. Used to execute synthesized predicate functions against the trial dataset.

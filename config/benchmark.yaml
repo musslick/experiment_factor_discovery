@@ -82,7 +82,9 @@ discovery:
   seeding_strategy:
     type: "random"
     n_candidates: 50
-    seed_multiplier: 1.0
+    seed_multiplier: 1.0     # scales n_candidates to set the draw size before truncating
+                             # back to n_candidates; only meaningful with template_bias:
+                             # "cognitive" (weighted sampling + dedup); no effect with "uniform"
     template_bias: "uniform"
     max_depends_on: 3
     max_output_levels: 3

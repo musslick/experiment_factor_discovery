@@ -33,6 +33,8 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from src.analysis.model_comparison import compute_final_model_statistics
+from src.analysis.plotting import plot_all_effects
 from src.data_generation import load_empirical_data
 from src.discovery.factor_registry import DiscoveredEffect, DiscoveredFactor, FactorRegistry
 from src.discovery.llm_client import LLMClient
@@ -158,8 +160,20 @@ def _build_output(
     registry: FactorRegistry,
     baseline_formula: str,
     named_by_term: dict,
+    final_stats: dict,
 ) -> dict:
     """Assemble the discovery_results.yaml content as a plain dict."""
+
+    # Strip the identifier keys ("name"/"term") so they don't duplicate fields
+    # already present in the output dicts when the stats are spread in.
+    factor_stats_by_name = {
+        s["name"]: {k: v for k, v in s.items() if k != "name"}
+        for s in final_stats.get("factors", [])
+    }
+    effect_stats_by_term = {
+        s["term"]: {k: v for k, v in s.items() if k != "term"}
+        for s in final_stats.get("interactions", [])
+    }
 
     discovered_factors = []
     for f in registry.discovered:
@@ -188,6 +202,7 @@ def _build_output(
             "validation_improvement": round(f.validation_improvement or 0.0, 4),
             "llm_name": naming.get("name", ""),
             "llm_interpretation": naming.get("interpretation", ""),
+            **factor_stats_by_name.get(f.column_name, {}),
         })
 
     for e in registry.discovered_effects:
@@ -200,6 +215,7 @@ def _build_output(
             "validation_improvement": round(e.validation_improvement, 4),
             "llm_name": naming.get("name", ""),
             "llm_interpretation": naming.get("interpretation", ""),
+            **effect_stats_by_term.get(e.term, {}),
         })
 
     return {
@@ -269,15 +285,76 @@ def run_single_discovery(
     registry = run_discovery_pipeline(input_df, aug_cfg, llm, registry, str(ds_dir))
 
     # ------------------------------------------------------------------
-    # Step 3: Name and interpret discovered effects
+    # Step 3: Final model statistics (LRT on full dataset)
+    # ------------------------------------------------------------------
+    print("\nComputing final model statistics …")
+
+    # Build analysis_df once: input_df + all discovered factor columns.
+    analysis_df = input_df.copy()
+    for _f in registry.discovered:
+        if _f.column_name not in analysis_df.columns:
+            analysis_df[_f.column_name] = _f.column_values
+
+    final_stats = compute_final_model_statistics(
+        analysis_df, baseline_formula,
+        registry.discovered, registry.discovered_effects,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 4: Name and interpret discovered effects
     # ------------------------------------------------------------------
     print("\nNaming and interpreting discovered effects …")
     named_by_term = _name_and_interpret_effects(registry, aug_cfg, llm)
 
     # ------------------------------------------------------------------
-    # Step 4: Save discovery_results.yaml
+    # Step 4b: Effect plots (after naming so LLM titles are available)
     # ------------------------------------------------------------------
-    output = _build_output(aug_cfg, registry, baseline_formula, named_by_term)
+    print("\nGenerating effect plots …")
+    factor_class_lookup = {
+        bf.name: ("discrete" if bf.dtype == "categorical" else "continuous")
+        for bf in aug_cfg.base_factors
+    }
+    for _f in registry.discovered:
+        factor_class_lookup[_f.column_name] = _f.candidate.factor_class
+
+    factor_stats_by_name_plots = {
+        s["name"]: {k: v for k, v in s.items() if k != "name"}
+        for s in final_stats.get("factors", [])
+    }
+    effect_stats_by_term_plots = {
+        s["term"]: {k: v for k, v in s.items() if k != "term"}
+        for s in final_stats.get("interactions", [])
+    }
+
+    # Build LLM name lookup: factor column_name → llm_name, effect term → llm_name
+    llm_name_lookup = {}
+    for _f in registry.discovered:
+        term = f"C({_f.column_name})" if _f.candidate.factor_class == "discrete" else _f.column_name
+        llm_name = named_by_term.get(term, {}).get("name", "")
+        if llm_name:
+            llm_name_lookup[_f.column_name] = llm_name
+    for _e in registry.discovered_effects:
+        llm_name = named_by_term.get(_e.term, {}).get("name", "")
+        if llm_name:
+            llm_name_lookup[_e.term] = llm_name
+
+    plot_all_effects(
+        df=analysis_df,
+        discovered_factors=registry.discovered,
+        discovered_effects=registry.discovered_effects,
+        factor_class_lookup=factor_class_lookup,
+        outcome_col=aug_cfg.outcome_variable,
+        participant_col="participant_id",
+        output_dir=ds_dir,
+        factor_stats_by_name=factor_stats_by_name_plots,
+        effect_stats_by_term=effect_stats_by_term_plots,
+        llm_name_lookup=llm_name_lookup,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 5: Save discovery_results.yaml
+    # ------------------------------------------------------------------
+    output = _build_output(aug_cfg, registry, baseline_formula, named_by_term, final_stats)
     result_path = ds_dir / "discovery_results.yaml"
     result_path.write_text(yaml.dump(output, default_flow_style=False, allow_unicode=True,
                                      sort_keys=False))

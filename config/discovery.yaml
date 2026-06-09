@@ -16,7 +16,7 @@ benchmark:
 # ── Discovery ─────────────────────────────────────────────────────────────────
 discovery:
   # ── Round structure ────────────────────────────────────────────────────────
-  n_rounds: 3                    # how many sequential discovery rounds to run; each round
+  n_rounds: 5                    # how many sequential discovery rounds to run; each round
                                  # attempts to discover one new factor
   max_search_iterations: 3       # CV iterations per round (seeding counts as iteration 0;
                                  # evolver runs max_search_iterations - 1 times)
@@ -69,7 +69,8 @@ discovery:
 
   # ── Stagnation detection ───────────────────────────────────────────────────
   stagnation_epsilon: 0.001  # rounds where winner CV gain < epsilon count as stagnant
-  stagnation_patience: 0     # stop early after this many consecutive stagnant rounds (0 = off)
+  stagnation_patience: 2     # stop early after 2 consecutive stagnant rounds; prevents
+                             # burning remaining rounds when the factor space is exhausted
 
   # ── Seeding strategy ───────────────────────────────────────────────────────
   seeding_strategy:
@@ -77,7 +78,10 @@ discovery:
                              # "random": random combinatorial enumeration from factor templates;
                              # "mixed": blend of both (configure via components list)
     n_candidates: 50        # number of seed candidates generated at the start of each round
-    seed_multiplier: 1.0     # scales n_candidates for round 1 only (larger first round)
+    seed_multiplier: 1.0     # scales n_candidates to set the draw size before truncating
+                             # back to n_candidates; only meaningful with template_bias:
+                             # "cognitive" (weighted sampling + dedup); has no effect with
+                             # template_bias: "uniform" (the default used here)
     template_bias: "uniform" # how templates are sampled: "uniform" or "complexity" (biases
                              # toward simpler factor templates)
     max_depends_on: 3        # maximum number of parent factors a candidate may depend on
@@ -94,7 +98,9 @@ discovery:
     n_candidates: 5          # candidates produced per evolution iteration
     top_k: 3                 # number of top-scoring candidates from the previous iteration
                              # shown to the LLM as parents
-    n_elite: 5               # top-k candidates carried forward unchanged each iteration
+    n_elite: 1               # top candidate carried forward unchanged each iteration;
+                             # with n_candidates=5, setting n_elite higher than 1 leaves
+                             # fewer slots for actual mutation/crossover/repair/novel
     n_tournament_parents: 3  # parents sampled for tournament selection in crossover
     n_diversity_parents: 1   # parents drawn uniformly to maintain population diversity
     operator_mix:            # probability mass assigned to each genetic operator

@@ -326,6 +326,87 @@ def evaluate_on_held_out(
 
 
 # ---------------------------------------------------------------------------
+# Final model statistics
+# ---------------------------------------------------------------------------
+
+def compute_final_model_statistics(
+    df: pd.DataFrame,
+    baseline_formula: str,
+    discovered_factors,
+    discovered_effects,
+) -> dict:
+    """
+    Run a sequential LRT for every discovered factor and interaction on the
+    full dataset (all participants, not just the held-out validation set).
+
+    Factors and interactions are processed in discovery order — sorted by
+    round_num, with factors preceding interactions within the same round.
+    Each LRT compares the cumulative formula before the item against the
+    formula that includes it (sequential / Type-I tests).
+
+    Returns a dict:
+        {
+          "factors":      [{"name": ..., "lrt_statistic": ..., "lrt_pvalue": ...,
+                            "lrt_dof": ..., "pseudo_r2_mcfadden": ...,
+                            "n_obs": ..., "converged": ...}, ...],
+          "interactions": [{"term": ..., same fields}, ...],
+        }
+
+    ``discovered_factors`` objects must expose: .column_name, .column_values,
+    .formula_with, .candidate.round_num.
+    ``discovered_effects`` objects must expose: .term, .formula_with, .round_num.
+    """
+    # Add every discovered factor column so the LRT formulae can reference them.
+    analysis_df = df.copy()
+    for f in discovered_factors:
+        if f.column_name not in analysis_df.columns:
+            analysis_df[f.column_name] = f.column_values
+
+    # Merge and sort: factors before effects within the same round.
+    events: list = []
+    for f in discovered_factors:
+        events.append((f.candidate.round_num, 0, "factor", f))
+    for e in discovered_effects:
+        events.append((e.round_num, 1, "effect", e))
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    factor_stats: list = []
+    interaction_stats: list = []
+    prev_formula = baseline_formula
+
+    for _round, _order, kind, item in events:
+        try:
+            lrt = compare_models_lrt(analysis_df, prev_formula, item.formula_with)
+            # McFadden pseudo-R² for the marginal contribution of this item:
+            #   1 − (llf_alt / llf_null), where both log-likelihoods are negative.
+            if lrt.llf_null < 0:
+                pseudo_r2: Optional[float] = round(
+                    1.0 - (lrt.llf_alt / lrt.llf_null), 4
+                )
+            else:
+                pseudo_r2 = None
+            stats = {
+                "lrt_statistic":      round(lrt.statistic, 4),
+                "lrt_pvalue":         lrt.pvalue,
+                "lrt_dof":            lrt.dof,
+                "pseudo_r2_mcfadden": pseudo_r2,
+                "n_obs":              lrt.n_obs,
+                "converged":          lrt.converged,
+            }
+        except Exception as exc:
+            stats = {"lrt_error": str(exc)}
+
+        if kind == "factor":
+            factor_stats.append({"name": item.column_name, **stats})
+        else:
+            interaction_stats.append({"term": item.term, **stats})
+
+        prev_formula = item.formula_with
+
+    return {"factors": factor_stats, "interactions": interaction_stats}
+
+
+# ---------------------------------------------------------------------------
 # Formula helpers
 # ---------------------------------------------------------------------------
 

@@ -33,6 +33,8 @@ from typing import List, Tuple
 import pandas as pd
 
 from src.analysis.evaluation import match_factors_bijection
+from src.analysis.model_comparison import compute_final_model_statistics
+from src.analysis.plotting import plot_all_effects
 from src.data_generation import get_data_generator, load_empirical_data
 from src.discovery.factor_registry import FactorRegistry
 from src.discovery.llm_client import LLMClient
@@ -151,7 +153,55 @@ def run_single_benchmark(
     registry = run_discovery_pipeline(input_df, cfg, llm, registry, str(bm_dir))
 
     # ------------------------------------------------------------------
-    # Step 3: Evaluation
+    # Step 3: Final model statistics (LRT on full dataset)
+    # ------------------------------------------------------------------
+    print("\nComputing final model statistics …")
+
+    # Build analysis_df once: input_df + all discovered factor columns.
+    analysis_df = input_df.copy()
+    for _f in registry.discovered:
+        if _f.column_name not in analysis_df.columns:
+            analysis_df[_f.column_name] = _f.column_values
+
+    final_stats = compute_final_model_statistics(
+        analysis_df, baseline_formula,
+        registry.discovered, registry.discovered_effects,
+    )
+    # Strip the identifier keys so they don't duplicate fields already present
+    # in the report dicts when the stats are spread in.
+    factor_stats_by_name = {
+        s["name"]: {k: v for k, v in s.items() if k != "name"}
+        for s in final_stats["factors"]
+    }
+    effect_stats_by_term = {
+        s["term"]: {k: v for k, v in s.items() if k != "term"}
+        for s in final_stats["interactions"]
+    }
+
+    # ------------------------------------------------------------------
+    # Step 3b: Effect plots
+    # ------------------------------------------------------------------
+    print("\nGenerating effect plots …")
+    factor_class_lookup = {
+        bf.name: ("discrete" if bf.dtype == "categorical" else "continuous")
+        for bf in cfg.base_factors
+    }
+    for _f in registry.discovered:
+        factor_class_lookup[_f.column_name] = _f.candidate.factor_class
+    plot_all_effects(
+        df=analysis_df,
+        discovered_factors=registry.discovered,
+        discovered_effects=registry.discovered_effects,
+        factor_class_lookup=factor_class_lookup,
+        outcome_col=cfg.outcome_variable,
+        participant_col="participant_id",
+        output_dir=bm_dir,
+        factor_stats_by_name=factor_stats_by_name,
+        effect_stats_by_term=effect_stats_by_term,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 4: Evaluation
     # ------------------------------------------------------------------
     print("\nEvaluating results …")
     ev_cfg = cfg.evaluation
@@ -182,7 +232,7 @@ def run_single_benchmark(
         print("\n  No interaction effects discovered.")
 
     # ------------------------------------------------------------------
-    # Step 4: Save report
+    # Step 5: Save report
     # ------------------------------------------------------------------
     gt_interactions = ev_cfg.ground_truth_interactions
     discovered_interaction_keys = {tuple(sorted(e.factor_names)) for e in registry.discovered_effects}
@@ -216,7 +266,8 @@ def run_single_benchmark(
                  "validation_improvement": f.validation_improvement,
                  "formula":                f.formula_with,
                  "sweetpea_code":          f.candidate.sweetpea_code,
-                 "compute_code":           f.candidate.compute_code}
+                 "compute_code":           f.candidate.compute_code,
+                 **factor_stats_by_name.get(f.column_name, {})}
                 for f in registry.discovered
             ],
         },
@@ -225,7 +276,8 @@ def run_single_benchmark(
                 {"term": e.term, "factor_names": e.factor_names,
                  "round": e.round_num, "cv_improvement": e.cv_score_mean,
                  "validation_improvement": e.validation_improvement,
-                 "source": e.source, "llm_rationale": e.llm_rationale}
+                 "source": e.source, "llm_rationale": e.llm_rationale,
+                 **effect_stats_by_term.get(e.term, {})}
                 for e in registry.discovered_effects
             ],
             "ground_truth_interactions": gt_interaction_results,
