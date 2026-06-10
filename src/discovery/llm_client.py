@@ -1,13 +1,25 @@
 """
-Thin wrapper around the Anthropic Messages API.
+LLM client wrappers.
 
-Reads ANTHROPIC_API_KEY from the environment (or a .env file in the project
-root).  Retries on rate-limit and server-overload errors with exponential
-back-off before re-raising.
+Two backends are supported:
+
+  LLMClient (Anthropic)
+      Wraps the Anthropic Messages API.  Reads ANTHROPIC_API_KEY from the
+      environment (or a .env file in the project root).  Retries on rate-limit
+      and server-overload errors with exponential back-off.
+
+  OllamaLLMClient (local Ollama)
+      Wraps a locally-running Ollama server (default http://localhost:11434).
+      Requires ``pip install ollama`` and a running ``ollama serve`` process.
+      No API key needed.
+
+Use ``make_llm_client(llm_cfg)`` to instantiate the right backend from a
+config object (reads ``llm_cfg.provider``, defaulting to ``"anthropic"``).
 """
 
 import os
 import time
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +35,18 @@ class LLMError(Exception):
     pass
 
 
-class LLMClient:
+class BaseLLMClient(ABC):
+    @abstractmethod
+    def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> str: ...
+
+
+class LLMClient(BaseLLMClient):
     """
     Parameters
     ----------
@@ -71,3 +94,53 @@ class LLMClient:
                 else:
                     raise LLMError(f"Anthropic API error {exc.status_code}: {exc}") from exc
         raise LLMError(f"API call failed after retries: {last_exc}") from last_exc
+
+
+class OllamaLLMClient(BaseLLMClient):
+    """
+    Parameters
+    ----------
+    model    : Ollama model name, e.g. ``"llama3.2"`` or ``"qwen2.5-coder"``.
+    base_url : URL of the Ollama server (default ``http://localhost:11434``).
+    """
+
+    def __init__(self, model: str, base_url: str = "http://localhost:11434"):
+        self.model = model
+        try:
+            import ollama
+            self._client = ollama.Client(host=base_url)
+        except ImportError as exc:
+            raise LLMError(
+                "ollama package is not installed. Run: pip install ollama"
+            ) from exc
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> str:
+        try:
+            response = self._client.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                options={"temperature": temperature, "num_predict": max_tokens},
+            )
+            return response.message.content
+        except Exception as exc:
+            raise LLMError(f"Ollama error: {exc}") from exc
+
+
+def make_llm_client(llm_cfg) -> BaseLLMClient:
+    """Instantiate the correct backend from a LLMConfig object."""
+    provider = getattr(llm_cfg, "provider", "anthropic")
+    if provider == "ollama":
+        return OllamaLLMClient(
+            model=llm_cfg.model,
+            base_url=getattr(llm_cfg, "ollama_base_url", "http://localhost:11434"),
+        )
+    return LLMClient(model=llm_cfg.model)

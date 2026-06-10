@@ -37,7 +37,7 @@ from src.analysis.model_comparison import compute_final_model_statistics
 from src.analysis.plotting import plot_all_effects
 from src.data_generation import get_data_generator, load_empirical_data
 from src.discovery.factor_registry import FactorRegistry
-from src.discovery.llm_client import LLMClient
+from src.discovery.llm_client import LLMClient, make_llm_client
 from src.discovery.pipeline import run_discovery_pipeline
 from src.utils.config import BenchmarkConfig, load_config, load_run_config
 
@@ -137,7 +137,7 @@ def run_single_benchmark(
     # Step 2: Discovery pipeline
     # ------------------------------------------------------------------
     print("\nRunning discovery pipeline …")
-    llm = LLMClient(model=cfg.llm.model)
+    llm = make_llm_client(cfg.llm)
 
     baseline_formula = _build_baseline_formula(cfg)
     print(f"  Baseline formula: {baseline_formula}")
