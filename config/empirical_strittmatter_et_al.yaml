@@ -1,0 +1,50 @@
+benchmark:
+  name: "rok_task_switching_strittmatter_et_al"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/rok_task_switching_Strittmatter_et_al.csv"
+  participant_id_column: "subject_id"
+  n_participants: 77
+  outcome_variable: "rt"
+  null_formula: "np.log(rt) ~ C(task) + motion_coherence + orientation_coherence"
+  full_formula: "np.log(rt) ~ C(task) + motion_coherence + orientation_coherence + C(task_transition)"
+  task_context: |
+    This is a random-object kinematogram (ROK) task-switching paradigm from Strittmatter et al.
+    On each trial, a stimulus of moving arrows is shown that varies in motion direction and
+    orientation. A task cue instructs participants to classify one of two dimensions:
+      motion      : is the net motion direction up or down?
+      orientation : do the arrows predominantly point up or down?
+    Participants must respond based on the cued dimension only and ignore the other.
+    The correct response is fully determined by the task cue and the relevant stimulus feature.
+    Motion and orientation coherence values (0–1) reflect how strongly the stimulus is biased
+    toward one of the two levels on each dimension; higher coherence means easier discrimination.
+    Accuracy (correct / incorrect) and reaction time are the outcomes to be predicted.
+  base_factors:
+    - {name: task,                  dtype: categorical, levels: [motion, orientation]}
+    - {name: motion,                dtype: categorical, levels: [up, down]}
+    - {name: orientation,           dtype: categorical, levels: [up, down]}
+    - {name: motion_coherence,      dtype: continuous}
+    - {name: orientation_coherence, dtype: continuous}
+    - {name: correct_response,      dtype: categorical, levels: [f, j], include_in_formula: false}
+  hidden_factors:
+    - name: "task_transition"
+      type: "transition"
+      levels: ["switch", "repeat"]
+    - name: "current_stimulus_difficulty"
+      type: "within_trial"
+      factor_class: "continuous"
+    - name: "past_stimulus_difficulty"
+      type: "window"
+      factor_class: "continuous"
+
+discovery:
+  allowed_factor_classes: ["continuous", "discrete"]
+  sandbox_timeout_seconds: 30
+
+statistical:
+  outcome_variables:
+    - name: rt       # primary — appears in null_formula LHS as "np.log(rt)"
+      type: continuous
+    - name: correct  # secondary — 0/1 column in the CSV
+      type: binary

@@ -9,14 +9,13 @@ benchmarks:
   # Synthetic benchmarks
   # - config/synthetic_stroop_benchmark.yaml
   # - config/synthetic_stroop_simon_benchmark.yaml
-  - config/synthetic_rdk_task_switching_benchmark.yaml
+  # - config/synthetic_rdk_task_switching_benchmark.yaml
   # - config/synthetic_prospect_theory_benchmark.yaml
   # Empirical benchmarks (can be mixed with synthetic)
   # - config/empirical_stroop_congruency.yaml
-  # - config/empirical_stroop_categorization.yaml
-  # - config/empirical_stroop_congruency.yaml
-  # - config/empricial_digit_task_switiching.yaml
-  - config/empirical_rok_movement_task.yaml
+  # - config/empirical_janker_et_al.yaml
+  # - config/empirical_digit_task_switiching.yaml
+  - config/empirical_strittmatter_et_al.yaml
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 benchmark:
