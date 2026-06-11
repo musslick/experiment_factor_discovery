@@ -32,13 +32,13 @@ import re
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import math
 import numpy as np
 import pandas as pd
 
-from src.analysis.model_comparison import CVScore, evaluate_on_held_out, score_candidate_cv
+from src.analysis.model_comparison import CVScore, evaluate_on_held_out, replace_formula_outcome, score_candidate_cv
 from src.discovery.factor_registry import (
     DiscoveredEffect,
     FactorRegistry,
@@ -367,6 +367,7 @@ def run_effect_search(
                 participant_col="participant_id",
                 n_folds=disc_cfg.cv_n_folds,
                 random_state=config.seed,
+                spec=config.model_spec,
             )
             prelim_scores.append(_Prelim(pair=pair, prelim_score=cv.mean_ll_improvement))
         except Exception as exc:
@@ -401,17 +402,30 @@ def run_effect_search(
             flush=True,
         )
 
-        try:
-            cv = score_candidate_cv(
-                df=search_df,
-                formula_null=formula_null,
-                formula_alt=formula_alt,
-                participant_col="participant_id",
-                n_folds=disc_cfg.cv_n_folds,
-                random_state=config.seed,
-            )
-        except Exception as exc:
-            print(f"✗ cv_error: {exc}")
+        # CV scoring across all outcomes
+        outcome_defs = config.outcome_variable_defs
+        per_outcome_cv: Dict[str, CVScore] = {}
+        cv_failed = False
+        for od in outcome_defs:
+            f_null_o = replace_formula_outcome(formula_null, od.name)
+            f_alt_o  = replace_formula_outcome(formula_alt,  od.name)
+            try:
+                cv_o = score_candidate_cv(
+                    df=search_df,
+                    formula_null=f_null_o,
+                    formula_alt=f_alt_o,
+                    participant_col="participant_id",
+                    n_folds=disc_cfg.cv_n_folds,
+                    random_state=config.seed,
+                    spec=config.model_specs[od.name],
+                )
+                per_outcome_cv[od.name] = cv_o
+            except Exception as exc:
+                print(f"✗ cv_error ({od.name}): {exc}")
+                cv_failed = True
+                break
+
+        if cv_failed:
             registry.record_interaction_test(
                 factor_names=[f_i, f_j],
                 term=term,
@@ -425,6 +439,8 @@ def run_effect_search(
             all_tested_this_round.append(registry.tested_interactions[-1])
             continue
 
+        cv = per_outcome_cv[outcome_defs[0].name]  # primary outcome (for logging)
+
         print(
             f"cv_mean={cv.mean_ll_improvement:.4f} "
             f"±se={cv.se_ll_improvement:.4f} "
@@ -433,8 +449,13 @@ def run_effect_search(
             flush=True,
         )
 
-        if not (math.isfinite(cv.mean_ll_improvement)
-                and cv.mean_ll_improvement >= disc_cfg.effect_search_min_cv_improvement):
+        # CV threshold: every outcome must meet the minimum
+        cv_below = any(
+            not (math.isfinite(cv_o.mean_ll_improvement)
+                 and cv_o.mean_ll_improvement >= disc_cfg.effect_search_min_cv_improvement)
+            for cv_o in per_outcome_cv.values()
+        )
+        if cv_below:
             print("→ below CV threshold")
             registry.record_interaction_test(
                 factor_names=[f_i, f_j],
@@ -449,25 +470,37 @@ def run_effect_search(
             all_tested_this_round.append(registry.tested_interactions[-1])
             continue
 
-        # Held-out validation
-        improvement = evaluate_on_held_out(
-            df_train=search_df,
-            df_test=validation_df,
-            formula_null=formula_null,
-            formula_alt=formula_alt,
-        )
+        # Held-out validation across all outcomes
+        val_improvements: Dict[str, float] = {}
+        val_accepted = True
+        for od in outcome_defs:
+            f_null_o = replace_formula_outcome(formula_null, od.name)
+            f_alt_o  = replace_formula_outcome(formula_alt,  od.name)
+            impr_o = evaluate_on_held_out(
+                df_train=search_df,
+                df_test=validation_df,
+                formula_null=f_null_o,
+                formula_alt=f_alt_o,
+                spec=config.model_specs[od.name],
+            )
+            val_improvements[od.name] = impr_o
+            if not (math.isfinite(impr_o) and impr_o >= disc_cfg.effect_search_min_validation_improvement):
+                val_accepted = False
 
-        accepted = (
-            math.isfinite(improvement)
-            and improvement >= disc_cfg.effect_search_min_validation_improvement
-        )
-        status = "ACCEPTED" if accepted else (
-            f"REJECTED (improvement={improvement:.4f} "
-            f"< threshold={disc_cfg.effect_search_min_validation_improvement})"
-        )
+        accepted = val_accepted
+        improvement = val_improvements.get(outcome_defs[0].name, float("-inf"))
+
+        if len(outcome_defs) > 1:
+            impr_str = ", ".join(f"{k}={v:.4f}" for k, v in val_improvements.items())
+            status = "ACCEPTED" if accepted else f"REJECTED ({impr_str})"
+        else:
+            status = "ACCEPTED" if accepted else (
+                f"REJECTED (improvement={improvement:.4f} "
+                f"< threshold={disc_cfg.effect_search_min_validation_improvement})"
+            )
         print(f"→ val={improvement:.4f} {status}")
 
-        outcome = "accepted" if accepted else "failed_validation"
+        outcome_str = "accepted" if accepted else "failed_validation"
         registry.record_interaction_test(
             factor_names=[f_i, f_j],
             term=term,
@@ -475,13 +508,13 @@ def run_effect_search(
             formula_snapshot=working_formula,
             cv_score_mean=cv.mean_ll_improvement,
             cv_score_se=cv.se_ll_improvement,
-            outcome=outcome,
+            outcome=outcome_str,
             round_num=round_num,
         )
         all_tested_this_round.append(registry.tested_interactions[-1])
 
         if accepted:
-            # Advance working_formula so subsequent candidates are scored conditionally
+            # Advance working_formula (primary outcome) so subsequent pairs score conditionally
             working_formula = formula_alt
             effect = DiscoveredEffect(
                 term=term,
@@ -492,6 +525,7 @@ def run_effect_search(
                 cv_score_se=cv.se_ll_improvement,
                 n_participants=cv.n_participants,
                 validation_improvement=improvement,
+                validation_improvements=val_improvements,
                 round_num=round_num,
                 formula_with=working_formula,
                 source="effect_search",

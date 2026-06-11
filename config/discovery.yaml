@@ -7,6 +7,7 @@
 
 datasets:
   - config/empirical_stroop_congruency.yaml
+  # - config/empirical_stroop_categorization.yaml
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 benchmark:
@@ -32,11 +33,16 @@ discovery:
   # ── Scoring / winner selection ─────────────────────────────────────────────
   stability_weight: 1.0          # λ in adjusted_score = (mean − λ·se) / complexity;
                                  # higher values penalise noisy candidates more strongly
-  complexity_exponent: 1.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
+  complexity_exponent: 0.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
                                  # continuous) in the complexity denominator; higher = stronger
-                                 # penalty for multi-level factors
-  depends_on_exponent: 0.5       # exponent on n_depends_on in the complexity denominator;
-                                 # higher = stronger penalty for factors with many parents
+                                 # penalty for multi-level factors, 1.0
+  depends_on_exponent: 0.0       # exponent on n_depends_on in the complexity denominator;
+                                 # higher = stronger penalty for factors with many parents, 0.5
+  novelty_weight: 0.0            # additive exploration bonus: adjusted_score += novelty_weight * (1 − max_similarity);
+                                 # 0.0 = disabled (default); similarity is NMI for discrete factors,
+                                 # |Spearman ρ| for continuous; typical useful range: 0.01–0.05
+                                 # (LL improvements are usually 0.01–0.10, so 0.02–0.05 gives novelty
+                                 # weight comparable to ~half a CV standard error)
   cv_n_folds: 5                  # number of cross-validation folds for candidate scoring
   validation_fraction: 0.20      # fraction of participants held out for final winner validation;
                                  # split is performed once before round 1 and reused
@@ -104,10 +110,10 @@ discovery:
     n_tournament_parents: 3  # parents sampled for tournament selection in crossover
     n_diversity_parents: 1   # parents drawn uniformly to maintain population diversity
     operator_mix:            # probability mass assigned to each genetic operator
-      mutation: 0.40         # tweak one aspect of a parent candidate
-      crossover: 0.30        # combine aspects of two parent candidates
-      repair: 0.20           # fix a parent that failed predicate synthesis
-      novel: 0.10            # propose an entirely new candidate (exploration)
+      mutation: 1.0         # tweak one aspect of a parent candidate. 0.4
+      crossover: 0.00        # combine aspects of two parent candidates. 0.3
+      repair: 0.00           # fix a parent that failed predicate synthesis. 2.0
+      novel: 0.00            # propose an entirely new candidate (exploration), 0.1
     diversity_threshold: 0.1 # candidates whose level-set overlap with an existing candidate
                              # exceeds this threshold are filtered out before scoring
 
@@ -123,3 +129,5 @@ llm:
 statistical:
   min_level_count: 5   # minimum number of occurrences required for each factor level;
                        # candidates where any level falls below this count are hard-rejected
+  outcome_type: "binary"   # "binary" → logistic regression | "continuous" → linear regression
+  mixed_effects: true     # add random intercept per participant (1|participant_id); linear only

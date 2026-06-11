@@ -298,6 +298,7 @@ def run_single_discovery(
     final_stats = compute_final_model_statistics(
         analysis_df, baseline_formula,
         registry.discovered, registry.discovered_effects,
+        spec=aug_cfg.model_spec,
     )
 
     # ------------------------------------------------------------------

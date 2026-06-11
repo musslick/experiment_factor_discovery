@@ -46,12 +46,13 @@ from src.utils.config import BenchmarkConfig
 def _save_round_log(result: RoundResult, output_dir: str) -> None:
     """Serialise a RoundResult to JSON (column Series values are omitted)."""
     log: dict = {
-        "round":                  result.round_num,
-        "accepted":               result.accepted,
-        "validation_improvement": result.validation_improvement,
-        "winner":                 None,
-        "all_scored":             [],
-        "hard_rejected":          [],
+        "round":                    result.round_num,
+        "accepted":                 result.accepted,
+        "validation_improvement":   result.validation_improvement,
+        "validation_improvements":  result.validation_improvements,
+        "winner":                   None,
+        "all_scored":               [],
+        "hard_rejected":            [],
     }
 
     if result.winner is not None:
@@ -66,6 +67,7 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "cv_score_mean":    w.cv_score_mean,
             "cv_score_se":      w.cv_score_se,
             "n_participants":   n_part,
+            "novelty_score":    w.novelty_score,
             "predicate_status": w.candidate.predicate_status,
             "sweetpea_code":    w.candidate.sweetpea_code,
             "compute_code":     w.candidate.compute_code,
@@ -82,6 +84,7 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "cv_score_mean":    sc.cv_score_mean,
             "cv_score_se":      sc.cv_score_se,
             "n_participants":   n_part,
+            "novelty_score":    sc.novelty_score,
             "predicate_status": sc.candidate.predicate_status,
             "sweetpea_code":    sc.candidate.sweetpea_code,
             "compute_code":     sc.candidate.compute_code,
@@ -184,6 +187,9 @@ def run_discovery_pipeline(
     n_val    = validation_df["participant_id"].nunique()
     print(f"\n  Participant split: {n_search} search / {n_val} validation")
 
+    # Register outcome variable definitions for multi-outcome support.
+    registry.set_outcome_variable_defs(config.outcome_variable_defs)
+
     # full_working_df tracks all participants with discovered factor columns
     # appended after each accepted round.  column_values stored in the registry
     # are aligned to this DataFrame's index so that evaluation.py can join them
@@ -200,8 +206,9 @@ def run_discovery_pipeline(
             observable_descriptions[bf.name] = " | ".join(f'"{lv}"' for lv in bf.levels)
         elif bf.dtype == "continuous":
             observable_descriptions[bf.name] = "float (continuous)"
-    # outcome variable
-    observable_descriptions[config.outcome_variable] = "0 | 1"
+    # outcome variable(s)
+    for od in config.outcome_variable_defs:
+        observable_descriptions[od.name] = "0 | 1" if od.type == "binary" else "continuous (float)"
 
     for round_num in range(1, disc_cfg.n_rounds + 1):
         print(f"\n{'='*60}")
@@ -255,6 +262,8 @@ def run_discovery_pipeline(
                 lrt_dof=0,
                 formula_with=formula_alt,
                 validation_improvement=result.validation_improvement,
+                validation_improvements=result.validation_improvements,
+                novelty_score=result.winner.novelty_score,
             )
             registry.register(discovered)
             new_factor_name = col_name

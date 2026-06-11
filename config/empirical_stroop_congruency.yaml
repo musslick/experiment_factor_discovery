@@ -6,14 +6,14 @@ dataset:
   path: "data/empirical/stroop_data_with_congruency.csv"
   participant_id_column: "subjectid"
   n_participants: 466
-  outcome_variable: "accuracy"
+  outcome_variable: "latency"
   extra_columns: ["trialnum", "blocknum", "blockcode"]
-  null_formula: "accuracy ~ C(color) + C(word)"
-  full_formula: "accuracy ~ C(color) + C(word) + C(congruency)"
+  null_formula: "np.log(latency) ~ C(color) + C(word)"
+  full_formula: "np.log(latency) ~ C(color) + C(word) + C(congruency)"
   task_context: |
     This is a Stroop task. On each trial a participant sees a colour word (e.g. "red",
     "blue", "green", "black") printed in coloured ink and must indicate the colour of
-    the ink by pressing a key. Accuracy (correct/incorrect) is the outcome to predict.
+    the ink by pressing a key. Response latency (RT) and accuracy are the outcomes to predict.
   base_factors:
     - {name: color, dtype: categorical, levels: [red, blue, green, black]}
     - {name: word,  dtype: categorical, levels: [red, blue, green, black]}
@@ -26,5 +26,17 @@ dataset:
 discovery:
   allowed_factor_classes: ["discrete"]
   sandbox_timeout_seconds: 30
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: latency    # primary — must appear in null_formula LHS ("np.log(latency)")
+      type: continuous
+    - name: accuracy   # secondary — must be a 0/1 column in the CSV
+      type: binary
 
 # No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.
