@@ -12,7 +12,9 @@ benchmarks:
   # - config/synthetic_rdk_task_switching_benchmark.yaml
   # - config/synthetic_prospect_theory_benchmark.yaml
   # Empirical benchmarks (can be mixed with synthetic)
-  - config/empirical_stroop_congruency.yaml
+  # - config/empirical_stroop_congruency.yaml
+  # - config/empricial_digit_task_switiching.yaml
+  - config/empirical_rok_movement_task.yaml
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 benchmark:
