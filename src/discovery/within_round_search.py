@@ -39,11 +39,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from src.analysis.evaluation import compute_nmi, compute_correlation
 from src.analysis.factor_encoder import encode_discrete_factor, encode_continuous_factor, encode_factor
 from src.analysis.model_comparison import (
     CVScore,
+    MultiOutcomeCVScore,
     build_extended_formula,
     evaluate_on_held_out,
+    replace_formula_outcome,
     score_candidate_cv,
 )
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor, FactorRegistry
@@ -70,8 +73,9 @@ class RoundResult:
     winner_val_series: Optional[pd.Series]
     all_scored: List[ScoredCandidate]
     hard_rejected_in_round: List[CandidateFactor]
-    validation_improvement: Optional[float]
+    validation_improvement: Optional[float]           # primary outcome (backward compat)
     accepted: bool
+    validation_improvements: Optional[Dict[str, float]] = None  # per-outcome
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +185,46 @@ def _n_params(candidate: CandidateFactor) -> int:
     return max(1, len(candidate.levels) - 1)
 
 
+def _collect_reference_series(
+    df: pd.DataFrame,
+    base_factors: list,
+    registry: FactorRegistry,
+    factor_class: str,
+) -> List[pd.Series]:
+    """
+    Return series for all known factors of the same class as the candidate.
+    Covers observable base factors and already-discovered factors.
+    """
+    series_list: List[pd.Series] = []
+    for bf in base_factors:
+        col_class = "continuous" if bf.dtype == "continuous" else "discrete"
+        if col_class == factor_class and bf.name in df.columns:
+            series_list.append(df[bf.name])
+    for disc in registry.discovered:
+        if disc.candidate.factor_class == factor_class and disc.column_name in df.columns:
+            series_list.append(df[disc.column_name])
+    return series_list
+
+
+def _compute_novelty_score(
+    series: pd.Series,
+    factor_class: str,
+    reference_series: List[pd.Series],
+) -> float:
+    """
+    Novelty of `series` relative to the reference pool: 1 − max_similarity.
+    Similarity is NMI for discrete factors, |Spearman ρ| for continuous.
+    Returns 1.0 when the pool is empty (nothing to compare against).
+    """
+    if not reference_series:
+        return 1.0
+    if factor_class == "discrete":
+        max_sim = max(compute_nmi(series, ref) for ref in reference_series)
+    else:
+        max_sim = max(compute_correlation(series, ref) for ref in reference_series)
+    return float(1.0 - max_sim)
+
+
 def _compute_adjusted_score(
     mean_ll: float,
     se_ll: float,
@@ -188,11 +232,14 @@ def _compute_adjusted_score(
     stability_weight: float,
     complexity_exponent: float,
     depends_on_exponent: float,
+    novelty_score: float = 0.0,
+    novelty_weight: float = 0.0,
 ) -> float:
     raw    = mean_ll - stability_weight * se_ll
     n_par  = _n_params(candidate)
     n_deps = max(1, len(candidate.depends_on))
-    return raw / (n_par ** complexity_exponent * n_deps ** depends_on_exponent)
+    return raw / (n_par ** complexity_exponent * n_deps ** depends_on_exponent) \
+           + novelty_weight * novelty_score
 
 
 def adjusted_score(
@@ -401,7 +448,13 @@ def run_within_round_search(
                     candidate.coarsening_of = decomp_factors
                     print(f"~ coarsening of {decomp_factors} (proceeding to CV scoring)", end=" ", flush=True)
 
-            # --- CV scoring ---
+            # --- novelty relative to known factor space ---
+            ref_series = _collect_reference_series(
+                search_df, config.base_factors, registry, candidate.factor_class
+            )
+            novelty = _compute_novelty_score(series, candidate.factor_class, ref_series)
+
+            # --- CV scoring (all outcomes) ---
             col_name = candidate.name
             search_with_col = search_df.copy()
             search_with_col[col_name] = series
@@ -409,45 +462,75 @@ def run_within_round_search(
             formula_null = registry.get_current_formula()
             formula_alt  = build_extended_formula(formula_null, col_name, factor_class=candidate.factor_class)
 
-            try:
-                cv_score = score_candidate_cv(
-                    df=search_with_col,
-                    formula_null=formula_null,
-                    formula_alt=formula_alt,
-                    participant_col="participant_id",
-                    n_folds=disc_cfg.cv_n_folds,
-                    random_state=config.seed,
-                )
-            except Exception as exc:
-                reason = f"cv_error: {exc}"
-                registry.hard_reject(candidate, reason)
-                hard_rejected_in_round.append(candidate)
-                print(f"✗ {reason}")
+            outcome_defs = config.outcome_variable_defs
+            per_outcome_cvs: Dict[str, CVScore] = {}
+            cv_failed = False
+            current_lhs = formula_null.split("~")[0].strip()
+            for od in outcome_defs:
+                lhs = current_lhs if od.name in current_lhs else od.name
+                f_null = replace_formula_outcome(formula_null, lhs)
+                f_alt  = replace_formula_outcome(formula_alt,  lhs)
+                try:
+                    cv_o = score_candidate_cv(
+                        df=search_with_col,
+                        formula_null=f_null,
+                        formula_alt=f_alt,
+                        participant_col="participant_id",
+                        n_folds=disc_cfg.cv_n_folds,
+                        random_state=config.seed,
+                        spec=config.model_specs[od.name],
+                    )
+                    per_outcome_cvs[od.name] = cv_o
+                except Exception as exc:
+                    reason = f"cv_error ({od.name}): {exc}"
+                    registry.hard_reject(candidate, reason)
+                    hard_rejected_in_round.append(candidate)
+                    print(f"✗ {reason}")
+                    cv_failed = True
+                    break
+
+            if cv_failed:
                 continue
+
+            multi_cv = MultiOutcomeCVScore(per_outcome=per_outcome_cvs)
+            primary_cv = per_outcome_cvs[outcome_defs[0].name]
 
             evaluated_names.add(col_name)
             adj = _compute_adjusted_score(
-                cv_score.mean_ll_improvement,
-                cv_score.se_ll_improvement,
+                multi_cv.joint_mean,
+                primary_cv.se_ll_improvement,
                 candidate,
                 disc_cfg.stability_weight,
                 disc_cfg.complexity_exponent,
                 disc_cfg.depends_on_exponent,
+                novelty_score=novelty,
+                novelty_weight=disc_cfg.novelty_weight,
             )
             sc = ScoredCandidate(
                 candidate=candidate,
-                cv_score_mean=cv_score.mean_ll_improvement,
-                cv_score_se=cv_score.se_ll_improvement,
+                cv_score_mean=multi_cv.joint_mean,
+                cv_score_se=primary_cv.se_ll_improvement,
                 adjusted_score=adj,
-                cv_score=cv_score,
+                cv_score=primary_cv,
+                multi_cv_score=multi_cv,
                 column_values=series,
+                novelty_score=novelty,
             )
             newly_scored.append(sc)
-            print(
-                f"✓ cv_mean={cv_score.mean_ll_improvement:.4f} "
-                f"±se={cv_score.se_ll_improvement:.4f} "
-                f"(n={cv_score.n_participants})"
-            )
+            novelty_str = f" novelty={novelty:.3f}" if disc_cfg.novelty_weight > 0.0 else ""
+            if len(outcome_defs) > 1:
+                outcome_parts = " ".join(
+                    f"{od.name}={per_outcome_cvs[od.name].mean_ll_improvement:.4f}"
+                    for od in outcome_defs
+                )
+                print(f"✓ joint_mean={multi_cv.joint_mean:.4f} [{outcome_parts}]{novelty_str}")
+            else:
+                print(
+                    f"✓ cv_mean={primary_cv.mean_ll_improvement:.4f} "
+                    f"±se={primary_cv.se_ll_improvement:.4f} "
+                    f"(n={primary_cv.n_participants})"
+                    f"{novelty_str}"
+                )
 
         all_scored.extend(newly_scored)
 
@@ -490,7 +573,17 @@ def run_within_round_search(
             validation_improvement=None, accepted=False,
         )
 
-    winner = _select_winner(all_scored)
+    outcome_defs = config.outcome_variable_defs
+    # In multi-outcome mode, only consider candidates that improved ALL outcomes on CV.
+    if len(outcome_defs) > 1:
+        eligible = [
+            sc for sc in all_scored
+            if sc.multi_cv_score is not None and sc.multi_cv_score.joint_min > 0
+        ]
+        winner = _select_winner(eligible if eligible else all_scored)
+    else:
+        winner = _select_winner(all_scored)
+
     print(
         f"\n  Winner: {winner.candidate.name}"
         f"  (cv_mean={winner.cv_score_mean:.4f},"
@@ -524,19 +617,38 @@ def run_within_round_search(
     val_with_winner = validation_df.copy()
     val_with_winner[col_name] = val_series
 
-    formula_null = registry.get_current_formula()
-    formula_alt  = build_extended_formula(formula_null, col_name, factor_class=winner.candidate.factor_class)
+    formula_null_primary = registry.get_current_formula()
+    formula_alt_primary  = build_extended_formula(formula_null_primary, col_name, factor_class=winner.candidate.factor_class)
 
-    improvement = evaluate_on_held_out(
-        df_train=search_with_winner,
-        df_test=val_with_winner,
-        formula_null=formula_null,
-        formula_alt=formula_alt,
-    )
+    # Validate on every outcome; all must meet the threshold.
+    val_improvements: Dict[str, float] = {}
+    val_accepted = True
+    current_lhs_primary = formula_null_primary.split("~")[0].strip()
+    for od in outcome_defs:
+        lhs = current_lhs_primary if od.name in current_lhs_primary else od.name
+        f_null = replace_formula_outcome(formula_null_primary, lhs)
+        f_alt  = replace_formula_outcome(formula_alt_primary,  lhs)
+        impr = evaluate_on_held_out(
+            df_train=search_with_winner,
+            df_test=val_with_winner,
+            formula_null=f_null,
+            formula_alt=f_alt,
+            spec=config.model_specs[od.name],
+        )
+        val_improvements[od.name] = impr
+        if not (math.isfinite(impr) and impr >= disc_cfg.min_validation_improvement):
+            val_accepted = False
 
-    accepted = math.isfinite(improvement) and improvement >= disc_cfg.min_validation_improvement
-    status   = "ACCEPTED" if accepted else f"REJECTED (improvement={improvement:.4f} < threshold={disc_cfg.min_validation_improvement})"
-    print(f"  Validation improvement: {improvement:.4f} → {status}")
+    accepted = val_accepted
+    primary_improvement = val_improvements.get(outcome_defs[0].name, float("-inf"))
+
+    if len(outcome_defs) > 1:
+        impr_str = ", ".join(f"{k}={v:.4f}" for k, v in val_improvements.items())
+        status = "ACCEPTED" if accepted else f"REJECTED ({impr_str})"
+        print(f"  Validation improvements: {impr_str} → {status}")
+    else:
+        status = "ACCEPTED" if accepted else f"REJECTED (improvement={primary_improvement:.4f} < threshold={disc_cfg.min_validation_improvement})"
+        print(f"  Validation improvement: {primary_improvement:.4f} → {status}")
 
     if not accepted:
         registry.add_evaluated(winner.candidate, winner.cv_score_mean, winner.cv_score_se)
@@ -544,5 +656,7 @@ def run_within_round_search(
     return RoundResult(
         round_num=round_num, winner=winner, winner_val_series=val_series,
         all_scored=all_scored, hard_rejected_in_round=hard_rejected_in_round,
-        validation_improvement=improvement, accepted=accepted,
+        validation_improvement=primary_improvement,
+        validation_improvements=val_improvements,
+        accepted=accepted,
     )

@@ -1,5 +1,9 @@
 """
-Nested logistic regression model comparison via Likelihood Ratio Test (LRT).
+Nested model comparison via Likelihood Ratio Test (LRT).
+
+Supports logistic regression (binary outcomes) and linear regression
+(continuous outcomes), each optionally with random intercepts per
+participant via statsmodels mixedlm (linear mixed effects only).
 
 Design notes
 ------------
@@ -8,25 +12,52 @@ Design notes
   essential for a valid LRT: if the null and alternative models were fit on
   different rows their log-likelihoods would not be comparable.
 
-* Degrees of freedom are computed as df_model_alt − df_model_null, where
-  statsmodels' df_model counts regressors excluding the intercept.  For a
-  binary factor encoded via C() this is 1; for an L-level factor it is L−1.
+* Degrees of freedom are computed as the difference in fixed-effect
+  parameter counts between null and alternative models.
 
-* Perfect / quasi-perfect separation is flagged when the model fails to
-  converge AND at least one |z-score| exceeds 10.  Callers should reject
-  such candidates rather than trust the reported p-value.
+* Perfect / quasi-perfect separation is flagged for logistic models when the
+  model fails to converge AND at least one |z-score| exceeds 10.  Callers
+  should reject such candidates rather than trust the reported p-value.
+
+* Linear mixed effects models must be fit with reml=False (maximum likelihood)
+  for LRT comparisons of models with different fixed effects to be valid.
+  REML-based LRT is only valid for comparing random-effects structures.
 """
 
 import re
 import warnings
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.stats import chi2
 import statsmodels.formula.api as smf
 from statsmodels.tools.sm_exceptions import PerfectSeparationWarning
+
+
+# ---------------------------------------------------------------------------
+# ModelSpec — encapsulates statistical modelling choices
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelSpec:
+    """
+    Specifies the statistical model family and random-effects structure.
+
+    family          : "logistic" for binary outcomes (logistic regression);
+                      "linear" for continuous outcomes (OLS or linear mixed effects).
+    mixed_effects   : if True, add a random intercept per participant (1|participant_col).
+                      Only supported for family="linear"; logistic mixed effects
+                      require pymer4 / R and raise NotImplementedError.
+    participant_col : grouping column for the random intercept.
+    """
+    family: str = "logistic"
+    mixed_effects: bool = False
+    participant_col: str = "participant_id"
+
+
+_DEFAULT_SPEC = ModelSpec(family="logistic", mixed_effects=False)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +81,17 @@ class LRTResult:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _outcome_col_from_formula(formula: str) -> str:
+    """Extract the raw column name from a formula LHS, stripping any function wrappers.
+
+    "np.log(latency) ~ ..." → "latency"
+    "latency ~ ..."         → "latency"
+    """
+    lhs = formula.split("~")[0].strip()
+    m = re.search(r'\(([^()]+)\)\s*$', lhs)
+    return m.group(1).strip() if m else lhs
+
 
 def _extract_columns(formula: str) -> set:
     """
@@ -84,6 +126,81 @@ def _fit_logit_catching_separation(formula, data, **kwargs):
     return result, separation
 
 
+def _fit_model(
+    formula: str,
+    data: pd.DataFrame,
+    spec: ModelSpec,
+    **logit_kwargs,
+) -> Tuple:
+    """
+    Fit a model according to spec.  Returns (result, issue_detected).
+
+    issue_detected meanings:
+      logistic fixed:  True → perfect/quasi-perfect separation detected
+      linear fixed:    always False (OLS is closed-form)
+      linear mixed:    True → model did not converge
+    """
+    if spec.family == "logistic":
+        if spec.mixed_effects:
+            raise NotImplementedError(
+                "Logistic mixed effects (GLMM) are not supported: statsmodels has no "
+                "reliable frequentist GLMM implementation.  Set mixed_effects: false "
+                "for binary outcomes, or use outcome_type: continuous for linear mixed effects."
+            )
+        return _fit_logit_catching_separation(formula, data, **logit_kwargs)
+
+    # Linear family
+    if spec.mixed_effects:
+        # Random intercept per participant: (1|participant_col).
+        # reml=False is required for LRT comparisons of nested fixed-effect models.
+        # Fall back to OLS when mixedlm hits a singular design matrix (e.g. a
+        # candidate factor that is perfectly collinear with an existing predictor).
+        try:
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                result = smf.mixedlm(
+                    formula, data, groups=data[spec.participant_col]
+                ).fit(reml=False, disp=False)
+            issue = not bool(getattr(result, "converged", True))
+            return result, issue
+        except np.linalg.LinAlgError:
+            result = smf.ols(formula, data).fit()
+            return result, False
+
+    # Linear fixed effects (OLS — closed-form, never fails to converge)
+    result = smf.ols(formula, data).fit()
+    return result, False
+
+
+def _model_dof(result) -> int:
+    """
+    Return the number of fixed-effect parameters from a fitted model result.
+
+    MixedLM exposes k_fe (includes intercept).
+    OLS / Logit expose df_model (excludes intercept).
+    Both give the same difference when comparing nested models.
+    """
+    if hasattr(result, "k_fe"):      # MixedLM
+        return int(result.k_fe)
+    return int(result.df_model)      # OLS / Logit
+
+
+def _result_converged(result) -> bool:
+    """Extract convergence status from any supported result type."""
+    if hasattr(result, "mle_retvals") and isinstance(result.mle_retvals, dict):
+        return bool(result.mle_retvals.get("converged", False))
+    return bool(getattr(result, "converged", True))
+
+
+def _resid_variance(result) -> float:
+    """Residual variance σ² for linear models (used in Gaussian LL computation)."""
+    for attr in ("scale", "mse_resid"):
+        val = getattr(result, attr, None)
+        if val is not None:
+            return max(float(val), 1e-10)
+    return 1.0
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -92,37 +209,39 @@ def compare_models_lrt(
     df: pd.DataFrame,
     formula_null: str,
     formula_alt: str,
+    spec: Optional[ModelSpec] = None,
 ) -> LRTResult:
     """
-    Fit null and alternative logistic regression models on a shared set of
-    valid rows, then compute a Likelihood Ratio Test.
+    Fit null and alternative models on a shared set of valid rows, then compute
+    a Likelihood Ratio Test.
 
     Parameters
     ----------
     df           : DataFrame containing all columns referenced by either formula.
-    formula_null : patsy formula for the restricted (null) model,
-                   e.g. ``"correct ~ 1"`` or ``"correct ~ C(congruency)"``.
-    formula_alt  : patsy formula for the unrestricted (alternative) model,
-                   e.g. ``"correct ~ C(congruency) + C(task_transition)"``.
+    formula_null : patsy formula for the restricted (null) model.
+    formula_alt  : patsy formula for the unrestricted (alternative) model.
+    spec         : ModelSpec controlling family and mixed-effects structure.
+                   Defaults to logistic fixed effects for backward compatibility.
 
     Returns
     -------
     LRTResult
     """
-    # Identify all columns needed by either formula and compute shared mask
+    spec = spec or _DEFAULT_SPEC
+
     all_cols = _extract_columns(formula_null) | _extract_columns(formula_alt)
     present  = [c for c in all_cols if c in df.columns]
     valid    = df[present].notna().all(axis=1)
     df_shared = df[valid].copy()
 
-    # Fit both models on identical rows; catch separation warnings on the alt model
-    fit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
-    res_null, _            = _fit_logit_catching_separation(formula_null, df_shared, **fit_kwargs)
-    res_alt,  sep_detected = _fit_logit_catching_separation(formula_alt,  df_shared, **fit_kwargs)
+    logit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
+    kw = logit_kwargs if spec.family == "logistic" else {}
 
-    # LRT
+    res_null, _            = _fit_model(formula_null, df_shared, spec, **kw)
+    res_alt,  sep_detected = _fit_model(formula_alt,  df_shared, spec, **kw)
+
     stat = float(-2.0 * (res_null.llf - res_alt.llf))
-    dof  = max(int(res_alt.df_model) - int(res_null.df_model), 1)
+    dof  = max(_model_dof(res_alt) - _model_dof(res_null), 1)
     pval = float(chi2.sf(stat, df=dof))
 
     return LRTResult(
@@ -132,7 +251,7 @@ def compare_models_lrt(
         llf_null=float(res_null.llf),
         llf_alt=float(res_alt.llf),
         n_obs=int(len(df_shared)),
-        converged=bool(res_alt.mle_retvals.get("converged", False)),
+        converged=_result_converged(res_alt),
         separation_detected=sep_detected,
         formula_null=formula_null,
         formula_alt=formula_alt,
@@ -158,15 +277,27 @@ def _participant_ll_improvements(
     all_cols: set,
     participant_col: str,
     outcome_col: str = "correct",
+    outcome_lhs: str = "",
+    family: str = "logistic",
 ) -> List[float]:
     """
     For each participant in df_test, compute summed LL improvement (alt − null)
     over that participant's valid (non-NaN) trials.  Returns a list of floats,
     one per participant that had at least one valid row.
+
+    For logistic models: binary cross-entropy log-likelihood.
+    For linear models:   Gaussian log-likelihood using σ² from the training fit.
+      Held-out participants (not seen during training) get population-level
+      predictions — i.e., fixed effects only, random intercept = 0.
     """
     test_present = [c for c in all_cols if c in df_test.columns]
     valid_mask = df_test[test_present].notna().all(axis=1)
     df_valid = df_test[valid_mask].copy()
+
+    # Pre-compute σ² for linear models once (from training-set fit)
+    if family == "linear":
+        sigma2_alt  = _resid_variance(res_alt)
+        sigma2_null = _resid_variance(res_null)
 
     scores: List[float] = []
     for pid in sorted(df_valid[participant_col].unique()):
@@ -174,11 +305,25 @@ def _participant_ll_improvements(
         if p_df.empty:
             continue
         try:
-            p_alt  = np.clip(np.asarray(res_alt.predict(p_df),  dtype=float), 1e-10, 1 - 1e-10)
-            p_null = np.clip(np.asarray(res_null.predict(p_df), dtype=float), 1e-10, 1 - 1e-10)
-            y = p_df[outcome_col].values.astype(float)
-            ll_alt  = float(np.sum(y * np.log(p_alt)  + (1 - y) * np.log(1 - p_alt)))
-            ll_null = float(np.sum(y * np.log(p_null) + (1 - y) * np.log(1 - p_null)))
+            if outcome_lhs and outcome_lhs != outcome_col:
+                col_ns = {col: p_df[col].values for col in p_df.columns}
+                y = np.asarray(eval(outcome_lhs, {"np": np}, col_ns), dtype=float)
+            else:
+                y = p_df[outcome_col].values.astype(float)
+            if family == "logistic":
+                p_alt  = np.clip(np.asarray(res_alt.predict(p_df),  dtype=float), 1e-10, 1 - 1e-10)
+                p_null = np.clip(np.asarray(res_null.predict(p_df), dtype=float), 1e-10, 1 - 1e-10)
+                ll_alt  = float(np.sum(y * np.log(p_alt)  + (1 - y) * np.log(1 - p_alt)))
+                ll_null = float(np.sum(y * np.log(p_null) + (1 - y) * np.log(1 - p_null)))
+            else:
+                # Gaussian LL: −n/2·log(2πσ²) − RSS/(2σ²)
+                yhat_alt  = np.asarray(res_alt.predict(p_df),  dtype=float)
+                yhat_null = np.asarray(res_null.predict(p_df), dtype=float)
+                n = len(y)
+                ll_alt  = float(-0.5 * n * np.log(2 * np.pi * sigma2_alt)
+                                - np.sum((y - yhat_alt) ** 2) / (2 * sigma2_alt))
+                ll_null = float(-0.5 * n * np.log(2 * np.pi * sigma2_null)
+                                - np.sum((y - yhat_null) ** 2) / (2 * sigma2_null))
             scores.append(ll_alt - ll_null)
         except Exception:
             continue
@@ -192,6 +337,7 @@ def score_candidate_cv(
     participant_col: str = "participant_id",
     n_folds: int = 5,
     random_state: int = 42,
+    spec: Optional[ModelSpec] = None,
 ) -> CVScore:
     """
     Participant-wise k-fold CV scoring of a candidate factor.
@@ -212,8 +358,9 @@ def score_candidate_cv(
     n_folds      : Number of CV folds (each fold = one group of participants).
     random_state : Seed for participant shuffling.
     """
+    spec = spec or _DEFAULT_SPEC
+
     pids = sorted(df[participant_col].unique())
-    n_total = len(pids)
 
     rng = np.random.RandomState(random_state)
     pids_shuffled = list(pids)
@@ -221,9 +368,11 @@ def score_candidate_cv(
 
     fold_groups = [list(g) for g in np.array_split(pids_shuffled, n_folds)]
     all_cols = _extract_columns(formula_null) | _extract_columns(formula_alt)
-    fit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
+    logit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
+    kw = logit_kwargs if spec.family == "logistic" else {}
 
-    outcome_col = formula_null.split("~")[0].strip()
+    outcome_col = _outcome_col_from_formula(formula_null)
+    outcome_lhs = formula_null.split("~")[0].strip()
     per_participant_scores: List[float] = []
 
     for fold_pids in fold_groups:
@@ -244,8 +393,8 @@ def score_candidate_cv(
             continue
 
         try:
-            res_null_f, _            = _fit_logit_catching_separation(formula_null, df_train_fit, **fit_kwargs)
-            res_alt_f,  sep_detected = _fit_logit_catching_separation(formula_alt,  df_train_fit, **fit_kwargs)
+            res_null_f, _            = _fit_model(formula_null, df_train_fit, spec, **kw)
+            res_alt_f,  sep_detected = _fit_model(formula_alt,  df_train_fit, spec, **kw)
         except Exception:
             per_participant_scores.extend([-np.inf] * len(fold_pids))
             continue
@@ -257,6 +406,8 @@ def score_candidate_cv(
         fold_scores = _participant_ll_improvements(
             res_null_f, res_alt_f, test_df, all_cols, participant_col,
             outcome_col=outcome_col,
+            outcome_lhs=outcome_lhs,
+            family=spec.family,
         )
         # Participants with no valid rows are silently dropped (no -inf added)
         per_participant_scores.extend(fold_scores)
@@ -285,12 +436,37 @@ def score_candidate_cv(
     )
 
 
+@dataclass
+class MultiOutcomeCVScore:
+    """CV scores for all outcomes; used when multiple outcome variables are specified."""
+    per_outcome: Dict[str, CVScore]
+
+    @property
+    def joint_mean(self) -> float:
+        """Mean per-outcome mean LL improvement — used for ranking candidates."""
+        scores = [s.mean_ll_improvement for s in self.per_outcome.values()]
+        return sum(scores) / len(scores)
+
+    @property
+    def joint_min(self) -> float:
+        """Minimum per-outcome mean LL improvement — used as acceptance gate."""
+        return min(s.mean_ll_improvement for s in self.per_outcome.values())
+
+
+@dataclass
+class MultiOutcomeImprovement:
+    """Held-out validation improvements for all outcomes."""
+    per_outcome: Dict[str, float]
+    accepted: bool   # True iff every outcome met the validation threshold
+
+
 def evaluate_on_held_out(
     df_train: pd.DataFrame,
     df_test: pd.DataFrame,
     formula_null: str,
     formula_alt: str,
     participant_col: str = "participant_id",
+    spec: Optional[ModelSpec] = None,
 ) -> float:
     """
     Fit null and alt models on df_train; return mean per-participant LL
@@ -298,6 +474,8 @@ def evaluate_on_held_out(
 
     Returns -inf if fitting fails or no participants could be evaluated.
     """
+    spec = spec or _DEFAULT_SPEC
+
     all_cols = _extract_columns(formula_null) | _extract_columns(formula_alt)
 
     train_present = [c for c in all_cols if c in df_train.columns]
@@ -307,20 +485,24 @@ def evaluate_on_held_out(
     if df_train_fit.empty:
         return -np.inf
 
-    fit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
+    logit_kwargs = dict(disp=0, method="newton", maxiter=200, warn_convergence=False)
+    kw = logit_kwargs if spec.family == "logistic" else {}
     try:
-        res_null, _            = _fit_logit_catching_separation(formula_null, df_train_fit, **fit_kwargs)
-        res_alt,  sep_detected = _fit_logit_catching_separation(formula_alt,  df_train_fit, **fit_kwargs)
+        res_null, _            = _fit_model(formula_null, df_train_fit, spec, **kw)
+        res_alt,  sep_detected = _fit_model(formula_alt,  df_train_fit, spec, **kw)
     except Exception:
         return -np.inf
 
     if sep_detected:
         return -np.inf
 
-    outcome_col = formula_null.split("~")[0].strip()
+    outcome_col = _outcome_col_from_formula(formula_null)
+    outcome_lhs = formula_null.split("~")[0].strip()
     scores = _participant_ll_improvements(
         res_null, res_alt, df_test, all_cols, participant_col,
         outcome_col=outcome_col,
+        outcome_lhs=outcome_lhs,
+        family=spec.family,
     )
     return float(np.mean(scores)) if scores else -np.inf
 
@@ -334,6 +516,7 @@ def compute_final_model_statistics(
     baseline_formula: str,
     discovered_factors,
     discovered_effects,
+    spec: Optional[ModelSpec] = None,
 ) -> dict:
     """
     Run a sequential LRT for every discovered factor and interaction on the
@@ -374,9 +557,11 @@ def compute_final_model_statistics(
     interaction_stats: list = []
     prev_formula = baseline_formula
 
+    spec = spec or _DEFAULT_SPEC
+
     for _round, _order, kind, item in events:
         try:
-            lrt = compare_models_lrt(analysis_df, prev_formula, item.formula_with)
+            lrt = compare_models_lrt(analysis_df, prev_formula, item.formula_with, spec=spec)
             # McFadden pseudo-R² for the marginal contribution of this item:
             #   1 − (llf_alt / llf_null), where both log-likelihoods are negative.
             if lrt.llf_null < 0:
@@ -438,3 +623,21 @@ def build_extended_formula(
     if rhs == "1":
         return f"{lhs.strip()} ~ {new_term}"
     return f"{lhs.strip()} ~ {rhs} + {new_term}"
+
+
+def replace_formula_outcome(formula: str, outcome_name: str) -> str:
+    """
+    Replace the LHS of *formula* with *outcome_name*.
+
+    Used to derive per-outcome formulas from the primary formula when
+    multiple outcome variables are specified.
+
+    Examples
+    --------
+    >>> replace_formula_outcome("correct ~ C(congruency)", "rt")
+    'rt ~ C(congruency)'
+    >>> replace_formula_outcome("correct ~ 1", "accuracy")
+    'accuracy ~ 1'
+    """
+    _, rhs = formula.split("~", 1)
+    return f"{outcome_name} ~ {rhs.strip()}"

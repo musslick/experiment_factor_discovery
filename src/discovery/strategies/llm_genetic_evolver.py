@@ -80,10 +80,12 @@ def _fmt_all_scored(scored: List[ScoredCandidate]) -> str:
         type_str = c.factor_type
         if c.factor_type == "window":
             type_str += f" w={c.window_width}"
+        novelty_str = f" | novelty={sc.novelty_score:.3f}" if sc.novelty_score > 0.0 else ""
         lines.append(
             f"  {rank}. {c.name} ({type_str}, {c.factor_class})"
             f" | adj={sc.adjusted_score:.4f}"
             f" | cv={sc.cv_score_mean:.4f}±{sc.cv_score_se:.4f}"
+            f"{novelty_str}"
             f"\n     {c.description}"
             f"\n     depends_on={c.depends_on}  levels=[{lvls}]"
         )

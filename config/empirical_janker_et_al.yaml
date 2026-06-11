@@ -1,0 +1,56 @@
+benchmark:
+  name: "stroop_categorization_empirical"
+  mode: "empirical_benchmark"
+
+statistical:
+  outcome_type: "binary"    # "binary" → logistic regression | "continuous" → linear regression
+
+dataset:
+  path: "data/empirical/janker_et_al.csv"
+  participant_id_column: "participant_id"
+  n_participants: 39
+  outcome_variable: "accuracy" # if changed to RT, make sure to also change the outcome_type above to "continuous"
+  # null_formula: base model given to the pipeline from the start
+  # full_formula: base model + hidden factor(s); used to gauge recovery ceiling
+  # task_transition is NaN for the first trial of each block (no predecessor).
+  # The pipeline's shared NaN mask automatically excludes those rows from model
+  # fitting, matching the synthetic benchmark convention.
+  null_formula: >-
+    accuracy ~ C(task) + C(task_transition)
+    + within_task_distractor + congruent
+  full_formula: >-
+    accuracy ~ C(task) + C(task_transition)
+    + within_task_distractor + congruent
+    + distractor_type_prev
+  task_context: |
+    This is a task switching paradigm. On each trial a participant
+    sees a centrally presented word (the target) alongside a simultaneously presented image
+    (the distractor) and must classify the word into one of four semantic categories:
+    trees, flowers, fish, or birds. Task 1 requires classifying plant words (trees vs.
+    flowers); Task 2 requires classifying animal words (fish vs. birds). The distractor
+    image is drawn either from the same task domain (within-task distractor) or the
+    opposite task domain (between-task distractor). Trials may repeat the same task as
+    the previous trial (task repeat) or switch to the other task (task switch).
+    Accuracy (correct / incorrect) is the outcome to predict.
+  base_factors:
+    - {name: task,                   dtype: categorical, levels: [1, 2]}
+    # NaN for first trial of each block (auto-excluded by pipeline NaN mask)
+    - {name: task_transition,        dtype: categorical, levels: [repeat, switch]}
+    # 0 = distractor from opposite task domain, 1 = distractor from same task domain
+    - {name: within_task_distractor, dtype: categorical, levels: [0, 1]}
+    # 0 = incongruent (word/image mismatch), 1 = congruent (word/image match)
+    - {name: congruent,              dtype: categorical, levels: [0, 1]}
+  hidden_factors:
+    # distractor_type_prev: was the previous trial's distractor within- or between-task?
+    # NaN for first trial of each block (auto-excluded by pipeline NaN mask).
+    - name: "distractor_type_prev"
+      type: "window"
+      levels: [within, between]
+
+discovery:
+  allowed_factor_classes: ["discrete"]
+  allowed_factor_types: ["within_trial", "window"]
+  sandbox_timeout_seconds: 30
+
+
+# Evaluation ground truth is auto-built from hidden_factors above.

@@ -32,7 +32,7 @@ low_scoring_candidates (property) : subset of evaluated_candidates whose mean
 import hashlib
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -80,7 +80,9 @@ class DiscoveredFactor:
     lrt_pvalue: float           # kept for backward compatibility; set to 1.0 in new pipeline
     lrt_dof: int                # kept for backward compatibility; set to 0 in new pipeline
     formula_with: str           # alternative model formula that detected this factor
-    validation_improvement: Optional[float] = None  # mean per-participant LL gain on held-out set
+    validation_improvement: Optional[float] = None  # primary-outcome held-out LL gain
+    validation_improvements: Optional[Dict[str, float]] = None  # per-outcome held-out LL gains
+    novelty_score: float = 0.0  # 1 - max_similarity to known factors at time of evaluation
 
     @property
     def is_continuous(self) -> bool:
@@ -105,6 +107,7 @@ class DiscoveredEffect:
     formula_with: str             # cumulative formula after adding this term
     source: str                   # "effect_search" | "decomposition_check_referral"
     llm_rationale: Optional[str] = None
+    validation_improvements: Optional[Dict[str, float]] = None  # per-outcome held-out LL gains
 
 
 @dataclass
@@ -138,23 +141,55 @@ class FactorRegistry:
         self.discovered: List[DiscoveredFactor] = []
         self.hard_rejected: List[CandidateFactor] = []
         self.evaluated_candidates: List[EvaluatedCandidate] = []
-        self.baseline_formula: str = baseline_formula
+        # Decompose formula into primary outcome name and RHS so that
+        # per-outcome formulas can be derived on demand (multi-outcome support).
+        lhs, rhs = baseline_formula.split("~", 1)
+        self._primary_outcome: str = lhs.strip()
+        self._formula_rhs: str = rhs.strip()
+        # Populated by pipeline.py via set_outcome_variable_defs(); each entry
+        # must expose a .name attribute.  Empty list = single-outcome mode.
+        self._outcome_variable_defs: list = []
         # Interaction effect tracking (Phase 2)
         self.discovered_effects: List[DiscoveredEffect] = []
         self.tested_interactions: List[TestedInteraction] = []
         self.pending_interactions: List[Tuple[str, str]] = []
 
+    # --- multi-outcome setup ---
+
+    def set_outcome_variable_defs(self, defs: list) -> None:
+        """Register all outcome variable definitions for multi-outcome mode."""
+        self._outcome_variable_defs = list(defs)
+        # Do NOT overwrite _primary_outcome here: it was parsed from the baseline
+        # formula LHS in __init__ and may contain a transform (e.g. "np.log(latency)").
+        # Replacing it with defs[0].name would silently drop that transform.
+
+    # --- formula properties ---
+
+    @property
+    def baseline_formula(self) -> str:
+        """Primary outcome's current formula (backward-compat accessor)."""
+        return f"{self._primary_outcome} ~ {self._formula_rhs}"
+
+    @property
+    def baseline_formulas(self) -> Dict[str, str]:
+        """Per-outcome current formulas.  Single-entry dict in single-outcome mode."""
+        if not self._outcome_variable_defs:
+            return {self._primary_outcome: self.baseline_formula}
+        return {od.name: f"{od.name} ~ {self._formula_rhs}" for od in self._outcome_variable_defs}
+
     # --- mutation ---
 
     def register(self, factor: DiscoveredFactor) -> None:
-        """Accept a factor: append to discovered list and advance the baseline formula."""
+        """Accept a factor: append to discovered list and advance all baseline formulas."""
         self.discovered.append(factor)
-        self.baseline_formula = factor.formula_with
+        _, rhs = factor.formula_with.split("~", 1)
+        self._formula_rhs = rhs.strip()
 
     def register_effect(self, effect: DiscoveredEffect) -> None:
-        """Accept an interaction effect and advance the baseline formula."""
+        """Accept an interaction effect and advance all baseline formulas."""
         self.discovered_effects.append(effect)
-        self.baseline_formula = effect.formula_with
+        _, rhs = effect.formula_with.split("~", 1)
+        self._formula_rhs = rhs.strip()
 
     def hard_reject(self, candidate: CandidateFactor, reason: str) -> None:
         """

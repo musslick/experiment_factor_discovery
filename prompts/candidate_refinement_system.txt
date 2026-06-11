@@ -63,7 +63,7 @@ Focus primarily on the top performers: understand what they capture and propose 
 4. Do NOT propose a factor that is just a renaming of an existing observable factor.
 5. Do NOT re-propose any factor listed under "Permanently banned factors".
 6. Do NOT reproduce exactly any already-evaluated candidate.
-7. Provide a short psychological rationale for why the factor might affect accuracy.
+7. Provide a short psychological rationale for why the factor might affect the behavioral outcome variable.
 8. window_width must be between 2 and <<max_window_width>> (inclusive).
 
 ━━━ OUTPUT FORMAT ━━━

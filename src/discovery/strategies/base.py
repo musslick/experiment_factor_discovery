@@ -42,6 +42,8 @@ class ScoredCandidate:
     adjusted_score: float
     cv_score: Any = field(default=None, repr=False)
     column_values: Any = field(default=None, repr=False)
+    novelty_score: float = 0.0
+    multi_cv_score: Any = field(default=None, repr=False)   # MultiOutcomeCVScore | None
 
 
 @dataclass

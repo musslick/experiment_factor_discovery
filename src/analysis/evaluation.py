@@ -105,6 +105,23 @@ def compute_correlation(gt_series: pd.Series, disc_series: pd.Series) -> float:
     return float(abs(rho))
 
 
+def compute_nmi(series_a: pd.Series, series_b: pd.Series) -> float:
+    """
+    Normalized mutual information between two discrete series.
+    Handles unequal level cardinalities and NaN rows (dropped before scoring).
+    Returns 0.0 if fewer than 2 valid rows remain.
+    """
+    from sklearn.metrics import normalized_mutual_info_score
+    combined = pd.DataFrame({"a": series_a, "b": series_b}).dropna()
+    if len(combined) < 2:
+        return 0.0
+    return float(normalized_mutual_info_score(
+        combined["a"].astype(str),
+        combined["b"].astype(str),
+        average_method="arithmetic",
+    ))
+
+
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------

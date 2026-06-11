@@ -9,9 +9,11 @@ benchmarks:
   # Synthetic benchmarks
   # - config/synthetic_stroop_benchmark.yaml
   # - config/synthetic_stroop_simon_benchmark.yaml
-  # - config/synthetic_rdk_task_switching_benchmark.yaml
+  - config/synthetic_rdk_task_switching_benchmark.yaml
   # - config/synthetic_prospect_theory_benchmark.yaml
   # Empirical benchmarks (can be mixed with synthetic)
+  # - config/empirical_stroop_congruency.yaml
+  # - config/empirical_stroop_categorization.yaml
   # - config/empirical_stroop_congruency.yaml
   # - config/empricial_digit_task_switiching.yaml
   - config/empirical_rok_movement_task.yaml
@@ -31,10 +33,10 @@ discovery:
   #   synthetic_rdk_task_switching : n_rounds=4, allowed_factor_classes=["discrete", "continuous"]
   #   synthetic_prospect_theory    : n_rounds=5, allowed_factor_classes=["discrete", "continuous"]
   #   empirical_stroop_congruency  : n_rounds=2, allowed_factor_classes=["discrete"]
-  n_rounds: 2                    # how many sequential discovery rounds to run; each round
+  n_rounds: 1                    # how many sequential discovery rounds to run; each round
                                  # attempts to discover one new factor
-  max_search_iterations: 3       # CV iterations per round (seeding counts as iteration 0;
-                                 # evolver runs max_search_iterations - 1 times)
+  max_search_iterations: 2       # CV iterations per round (seeding counts as iteration 0;
+                                 # evolver runs max_search_iterations - 1 times), e.g., 3
 
   # ── Predicate synthesis ────────────────────────────────────────────────────
   max_synthesis_retries: 2       # max LLM retry attempts when synthesised predicate fails
@@ -45,12 +47,17 @@ discovery:
 
   # ── Scoring / winner selection ─────────────────────────────────────────────
   stability_weight: 1.0          # λ in adjusted_score = (mean − λ·se) / complexity;
-                                 # higher values penalise noisy candidates more strongly
-  complexity_exponent: 1.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
+                                 # higher values penalise noisy candidates more strongly, e.g., 1.0
+  complexity_exponent: 0.0       # exponent on n_params (n_levels − 1 for discrete, 1 for
                                  # continuous) in the complexity denominator; higher = stronger
-                                 # penalty for multi-level factors
-  depends_on_exponent: 0.5       # exponent on n_depends_on in the complexity denominator;
-                                 # higher = stronger penalty for factors with many parents
+                                 # penalty for multi-level factors, e.g., 1.0
+  depends_on_exponent: 0.0       # exponent on n_depends_on in the complexity denominator;
+                                 # higher = stronger penalty for factors with many parents, e.g., 0.5
+  novelty_weight: 0.00            # additive exploration bonus: adjusted_score += novelty_weight * (1 − max_similarity);
+                                 # 0.0 = disabled (default); similarity is NMI for discrete factors,
+                                 # |Spearman ρ| for continuous; typical useful range: 0.01–0.05
+                                 # (LL improvements are usually 0.01–0.10, so 0.02–0.05 gives novelty
+                                 # weight comparable to ~half a CV standard error)
   cv_n_folds: 5                  # number of cross-validation folds for candidate scoring
   validation_fraction: 0.20      # fraction of participants held out for final winner validation;
                                  # split is performed once before round 1 and reused
@@ -73,7 +80,7 @@ discovery:
 
   # ── Factor space constraints ───────────────────────────────────────────────
   allowed_factor_types: ["within_trial", "window"]
-  allowed_factor_classes: ["discrete"]
+  allowed_factor_classes: ["discrete", "continuous"]  # e.g., ["discrete"]
   max_window_width: 4
 
   # ── Stagnation detection ───────────────────────────────────────────────────
@@ -83,10 +90,10 @@ discovery:
   # ── Seeding strategy ───────────────────────────────────────────────────────
   seeding_strategy:
     type: "random"
-    n_candidates: 50
-    seed_multiplier: 1.0     # scales n_candidates to set the draw size before truncating
-                             # back to n_candidates; only meaningful with template_bias:
-                             # "cognitive" (weighted sampling + dedup); no effect with "uniform"
+    n_candidates: 50             # number of seed candidates per round, e.g., 50
+    seed_multiplier: 1.0         # scales n_candidates to set the draw size before truncating
+                                 # back to n_candidates; only meaningful with template_bias:
+                                 # "cognitive" (weighted sampling + dedup); no effect with "uniform"
     template_bias: "uniform"
     max_depends_on: 3
     max_output_levels: 3
@@ -96,16 +103,16 @@ discovery:
   # ── Evolution strategy ─────────────────────────────────────────────────────
   evolution_strategy:
     type: "llm_genetic"
-    n_candidates: 5
+    n_candidates: 10
     top_k: 3
     n_elite: 1
-    n_tournament_parents: 3
-    n_diversity_parents: 1
+    n_tournament_parents: 2      # parents sampled for tournament selection, e.g., 3
+    n_diversity_parents: 0       # parents drawn uniformly to maintain diversity, e.g., 1
     operator_mix:
-      mutation: 0.40
-      crossover: 0.30
-      repair: 0.20
-      novel: 0.10
+      mutation: 1.0              # tweak one aspect of a parent candidate, e.g., 0.40
+      crossover: 0.0             # combine aspects of two parent candidates, e.g., 0.30
+      repair: 0.0                # fix a parent that failed predicate synthesis, e.g., 0.20
+      novel: 0.0                 # propose an entirely new candidate (exploration), e.g., 0.10
     diversity_threshold: 0.1
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
@@ -124,7 +131,9 @@ llm:
 
 # ── Statistical ───────────────────────────────────────────────────────────────
 statistical:
-  min_level_count: 5
+  min_level_count: 5        # minimum occurrences per level; guards against near-degenerate factors
+  outcome_type: "binary"    # "binary" → logistic regression | "continuous" → linear regression
+  mixed_effects: false      # add random intercept per participant (1|participant_id); linear only
 
 # ── Evaluation defaults (ground_truth_factors stay per-benchmark) ─────────────
 evaluation:

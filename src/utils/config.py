@@ -38,6 +38,12 @@ class EvolutionStrategyConfig:
 
 
 @dataclass
+class OutcomeVariableDef:
+    name: str
+    type: str   # "binary" | "continuous"
+
+
+@dataclass
 class ModelTerm:
     factor: str
     coefficient: float
@@ -132,6 +138,7 @@ class DiscoveryConfig:
     max_window_width: int = 5
     stagnation_epsilon: float = 0.001
     stagnation_patience: int = 0
+    novelty_weight: float = 0.0
     seeding_strategy: SeedingStrategyConfig = field(default_factory=SeedingStrategyConfig)
     evolution_strategy: EvolutionStrategyConfig = field(default_factory=EvolutionStrategyConfig)
 
@@ -150,6 +157,11 @@ class LLMConfig:
 @dataclass
 class StatisticalConfig:
     min_level_count: int
+    outcome_type: str = "binary"   # "binary" → logistic regression; "continuous" → linear regression
+    mixed_effects: bool = False    # add random intercept per participant: (1|participant_id)
+    # Multi-outcome support: when non-empty, overrides the single outcome_type above.
+    # The first entry corresponds to the primary outcome (must match dataset.outcome_variable).
+    outcome_variables: List[OutcomeVariableDef] = field(default_factory=list)
 
 
 @dataclass
@@ -205,6 +217,39 @@ class BenchmarkConfig:
     def task_context(self) -> str:
         src = self.dataset if self.dataset is not None else self.data_generation
         return src.task_context if src is not None else ""
+
+    @property
+    def outcome_variable_defs(self) -> List[OutcomeVariableDef]:
+        """Return outcome variable definitions. Multi-outcome when statistical.outcome_variables is set."""
+        if self.statistical.outcome_variables:
+            return self.statistical.outcome_variables
+        return [OutcomeVariableDef(name=self.outcome_variable, type=self.statistical.outcome_type)]
+
+    @property
+    def model_specs(self) -> Dict[str, "ModelSpec"]:
+        """Return a ModelSpec per outcome variable, keyed by outcome name."""
+        from src.analysis.model_comparison import ModelSpec
+        return {
+            od.name: ModelSpec(
+                family="logistic" if od.type == "binary" else "linear",
+                # GLMM for binary outcomes is not supported; force fixed effects regardless
+                # of the global mixed_effects setting to avoid a silent NotImplementedError.
+                mixed_effects=False if od.type == "binary" else self.statistical.mixed_effects,
+                participant_col="participant_id",
+            )
+            for od in self.outcome_variable_defs
+        }
+
+    @property
+    def model_spec(self):
+        """Return a ModelSpec for the primary outcome (backward compat)."""
+        from src.analysis.model_comparison import ModelSpec
+        is_binary = self.statistical.outcome_type == "binary"
+        return ModelSpec(
+            family="logistic" if is_binary else "linear",
+            mixed_effects=False if is_binary else self.statistical.mixed_effects,
+            participant_col="participant_id",
+        )
 
 
 @dataclass
@@ -396,6 +441,7 @@ def _parse_benchmark_dict(raw: dict) -> BenchmarkConfig:
         max_window_width=disc.get("max_window_width", 5),
         stagnation_epsilon=disc.get("stagnation_epsilon", 0.001),
         stagnation_patience=disc.get("stagnation_patience", 0),
+        novelty_weight=float(disc.get("novelty_weight", 0.0)),
         seeding_strategy=_parse_seeding_strategy_config(disc.get("seeding_strategy", {})),
         evolution_strategy=_parse_evolution_strategy_config(disc.get("evolution_strategy", {})),
     )
@@ -410,7 +456,16 @@ def _parse_benchmark_dict(raw: dict) -> BenchmarkConfig:
         ollama_base_url=llm_raw.get("ollama_base_url", "http://localhost:11434"),
     )
 
-    statistical = StatisticalConfig(min_level_count=stat.get("min_level_count", 5))
+    outcome_variables = [
+        OutcomeVariableDef(name=ov["name"], type=ov["type"])
+        for ov in stat.get("outcome_variables", [])
+    ]
+    statistical = StatisticalConfig(
+        min_level_count=stat.get("min_level_count", 5),
+        outcome_type=stat.get("outcome_type", "binary"),
+        mixed_effects=bool(stat.get("mixed_effects", False)),
+        outcome_variables=outcome_variables,
+    )
 
     evaluation = EvaluationConfig(
         ground_truth_factors=[

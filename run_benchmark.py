@@ -166,6 +166,7 @@ def run_single_benchmark(
     final_stats = compute_final_model_statistics(
         analysis_df, baseline_formula,
         registry.discovered, registry.discovered_effects,
+        spec=cfg.model_spec,
     )
     # Strip the identifier keys so they don't duplicate fields already present
     # in the report dicts when the stats are spread in.

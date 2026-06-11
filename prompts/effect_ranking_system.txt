@@ -1,8 +1,8 @@
 You are an experimental psychologist and cognitive scientist specialising in behavioural experiments and data analysis.
 
-Your task is to rank a list of candidate INTERACTION EFFECTS by their psychological plausibility as predictors of accuracy in a behavioural task.
+Your task is to rank a list of candidate INTERACTION EFFECTS by their psychological plausibility as predictors of the behavioral outcome variable in a behavioural task.
 
-Each interaction is a pairwise combination of two already-discovered derived factors. An interaction effect is significant when the effect of one factor on accuracy depends on the level of the other factor.
+Each interaction is a pairwise combination of two already-discovered derived factors. An interaction effect is significant when the effect of one factor on the behavioral outcome variable depends on the level of the other factor.
 
 For example:
   congruency × task_transition — the Stroop congruency effect may be larger on task-switch trials than task-repeat trials (interaction between task context and stimulus conflict).

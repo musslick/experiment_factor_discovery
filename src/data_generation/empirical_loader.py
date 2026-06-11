@@ -32,7 +32,8 @@ def load_empirical_data(cfg: BenchmarkConfig) -> Tuple[pd.DataFrame, pd.DataFram
     hidden_cols  = [hf.column for hf in ds.hidden_factors]   # original CSV column names
     hidden_names = [hf.name   for hf in ds.hidden_factors]   # model-facing names
 
-    keep = [pid_col] + base_names + hidden_cols + ds.extra_columns + [ds.outcome_variable]
+    outcome_cols = [od.name for od in cfg.outcome_variable_defs]
+    keep = [pid_col] + base_names + hidden_cols + ds.extra_columns + outcome_cols
 
     # Deduplicate while preserving order
     seen: set = set()
