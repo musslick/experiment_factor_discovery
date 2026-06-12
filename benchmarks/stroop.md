@@ -54,4 +54,4 @@ Both factors carry unique predictive signal for accuracy; neither is recoverable
 
 ## Config file
 
-`config/stroop_benchmark.yaml`
+`config/synthetic_stroop_benchmark.yaml`

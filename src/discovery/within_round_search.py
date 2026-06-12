@@ -123,6 +123,7 @@ def compute_factor_column(
         timeout_seconds=config.discovery.sandbox_timeout_seconds,
         backend=config.discovery.sandbox_backend,
         depends_on=candidate.depends_on,
+        docker_image=config.discovery.docker_image,
     )
     if not sandbox.success:
         return None
@@ -307,7 +308,7 @@ def _build_obs_desc_str(
 ) -> str:
     lines = []
     for name in observable_cols:
-        if name in ("participant_id", "trial_index"):
+        if name in ("participant_id", "block_index", "trial_index"):
             continue
         desc = (descriptions or {}).get(name, "")
         lines.append(f"  {name}{': ' + desc if desc else ''}")
@@ -382,6 +383,7 @@ def run_within_round_search(
                     temperature=llm_cfg.predicate_temperature,
                     timeout_seconds=disc_cfg.sandbox_timeout_seconds,
                     backend=disc_cfg.sandbox_backend,
+                    docker_image=disc_cfg.docker_image,
                     max_tokens=llm_cfg.max_tokens_predicate,
                     observable_factor_descriptions=_build_obs_desc_str(
                         observable_cols, observable_descriptions
@@ -403,6 +405,7 @@ def run_within_round_search(
                 timeout_seconds=disc_cfg.sandbox_timeout_seconds,
                 backend=disc_cfg.sandbox_backend,
                 depends_on=candidate.depends_on,
+                docker_image=disc_cfg.docker_image,
             )
             if not sandbox.success:
                 reason = f"sandbox_{sandbox.error_type}"

@@ -44,7 +44,7 @@ def full_df():
 
 class TestStructure:
     EXPECTED_COLS = {
-        "participant_id", "trial_index", "task", "color", "word",
+        "participant_id", "block_index", "trial_index", "task", "color", "word",
         "congruency", "task_transition", "correct",
     }
 
@@ -63,7 +63,7 @@ class TestStructure:
         assert (counts == N_BLOCKS * TRIALS_PER_BLOCK).all()
 
     def test_no_nan_in_non_transition_columns(self, full_df):
-        for col in ["task", "color", "word", "congruency", "correct", "participant_id", "trial_index"]:
+        for col in ["task", "color", "word", "congruency", "correct", "participant_id", "block_index", "trial_index"]:
             assert full_df[col].isna().sum() == 0, f"Unexpected NaN in {col}"
 
     def test_task_transition_nan_count(self, full_df):

@@ -1,5 +1,5 @@
 """
-RandomSeeder         — SweetPea-aware template sampling (T1-T9).
+RandomSeeder         — SweetPea-aware template sampling (T1-T11).
 RandomLookupSeeder   — template-free categorical random lookup tables.
 FactorTemplateLibrary— enumerates all valid template instantiations.
 
@@ -18,6 +18,8 @@ T6  proportion          window        continuous n/a           1 discrete parent
 T7  continuous_transform within_trial continuous n/a           ≥1 continuous parent (constraint)
 T8  running_stat        window        continuous n/a           ≥1 continuous parent (constraint)
 T9  random_partition    within_trial  discrete   binary        fallback; random lookup table
+T10 n2_task_inhibition  window        discrete   3-level       task ABA / CBA / other pattern
+T11 lagged_select      window        continuous n/a           previous trial selected continuous value
 """
 
 import hashlib
@@ -28,6 +30,13 @@ from typing import List, Optional, Tuple
 
 from src.discovery.factor_registry import CandidateFactor
 from src.discovery.strategies.base import SearchContext, SeedingStrategy
+
+
+def _rng_for_context(seed: Optional[int], context: SearchContext) -> random.Random:
+    if seed is None:
+        return random.Random()
+    derived_seed = int(seed) + 1009 * int(context.round_num) + 9176 * int(context.iteration)
+    return random.Random(derived_seed)
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +79,20 @@ def _gen_t5(f: str) -> str:
         def compute_factor(window: list) -> str:
             vals = [w['{f}'] for w in window]
             return 'streak' if len(set(vals)) == 1 else 'broken'
+        """)
+
+
+def _gen_t10_task_n2(f: str) -> str:
+    return textwrap.dedent(f"""\
+        def compute_factor(window: list) -> str:
+            two_back = window[0]['{f}']
+            previous = window[-2]['{f}']
+            current = window[-1]['{f}']
+            if current == two_back and current != previous:
+                return 'aba_return'
+            if current != two_back and current != previous and previous != two_back:
+                return 'cba_nonreturn'
+            return 'other'
         """)
 
 
@@ -161,6 +184,18 @@ def _gen_t8_min(f: str) -> str:
         """)
 
 
+def _gen_t11_lagged_conditional_select(discrete_f: str, mapping: dict, invert: bool) -> str:
+    mapping_repr = repr(mapping)
+    return_expr = "1.0 - float(value)" if invert else "float(value)"
+    return textwrap.dedent(f"""\
+        def compute_factor(window: list) -> float:
+            _map = {mapping_repr}
+            previous = window[0]
+            value = previous[_map[previous['{discrete_f}']]]
+            return {return_expr}
+        """)
+
+
 def _gen_t9_within_trial(depends_on: List[str], lookup: dict) -> str:
     """Generate an if-elif chain for a within-trial random partition."""
     lines = ["def compute_factor(trial: dict) -> str:"]
@@ -212,7 +247,7 @@ def _gen_t9_window(depends_on: List[str], window_width: int, lookup: dict) -> st
 
 class FactorTemplateLibrary:
     """
-    Enumerates all valid CandidateFactor stubs from templates T1-T8.
+    Enumerates all valid CandidateFactor stubs from templates T1-T11.
     Each stub has compute_code set so no LLM synthesis is needed.
     """
 
@@ -238,6 +273,7 @@ class FactorTemplateLibrary:
             candidates.extend(self._t3(discrete_obs, context.max_window_width, context.round_num))
             candidates.extend(self._t4(discrete_obs, context.round_num))
             candidates.extend(self._t5(discrete_obs, context.max_window_width, context.round_num))
+            candidates.extend(self._t10(discrete_obs, context.max_window_width, context.round_num))
         if allow_win and allow_cont:
             # T6: proportion of discrete levels — no continuous parent required
             candidates.extend(self._t6(discrete_obs, context.max_window_width, context.round_num))
@@ -245,6 +281,7 @@ class FactorTemplateLibrary:
             candidates.extend(self._t7(obs, continuous_obs, context.round_num))
         if allow_win and allow_cont and continuous_obs:
             candidates.extend(self._t8(continuous_obs, context.max_window_width, context.round_num))
+            candidates.extend(self._t11(obs, continuous_obs, context.round_num))
 
         return candidates
 
@@ -412,6 +449,32 @@ class FactorTemplateLibrary:
                 ))
         return out
 
+    def _t10(self, discrete_obs: List[dict], max_width: int, round_num: int) -> List[CandidateFactor]:
+        if max_width < 3:
+            return []
+        out = []
+        for f in discrete_obs:
+            if "task" not in f["name"].lower() or len(f.get("levels", [])) < 3:
+                continue
+            name = f"n2_{f['name']}_inhibition"
+            out.append(CandidateFactor(
+                name=name,
+                description=(
+                    f"Three-trial {f['name']} sequence pattern: ABA return, "
+                    "CBA non-return, or other"
+                ),
+                factor_type="window",
+                factor_class="discrete",
+                window_width=3,
+                levels=["aba_return", "cba_nonreturn", "other"],
+                depends_on=[f["name"]],
+                round_num=round_num,
+                compute_code=_gen_t10_task_n2(f["name"]),
+                predicate_status="pending",
+                priority=True,
+            ))
+        return out
+
     def _t6(self, discrete_obs: List[dict], max_width: int, round_num: int) -> List[CandidateFactor]:
         out = []
         for f in discrete_obs:
@@ -548,6 +611,52 @@ class FactorTemplateLibrary:
                     ))
         return out
 
+    def _t11(
+        self,
+        all_obs: List[dict],
+        continuous_obs: List[dict],
+        round_num: int,
+    ) -> List[CandidateFactor]:
+        """Lagged conditional continuous selection over a width-2 window."""
+        out = []
+        cont_names = [f["name"] for f in continuous_obs]
+        discrete_obs = [f for f in all_obs if f.get("dtype", "categorical") == "categorical"]
+
+        for disc_f in discrete_obs:
+            disc_levels = disc_f.get("levels", [])
+            if len(disc_levels) != len(continuous_obs):
+                continue
+
+            mapping = {lv: cf["name"] for lv, cf in zip(disc_levels, continuous_obs)}
+            name_sel = f"{disc_f['name']}_sel_coherence_lag_w2"
+            out.append(CandidateFactor(
+                name=name_sel,
+                description=f"Previous trial continuous value selected by {disc_f['name']}",
+                factor_type="window",
+                factor_class="continuous",
+                window_width=2,
+                levels=[],
+                depends_on=[disc_f["name"]] + cont_names,
+                round_num=round_num,
+                compute_code=_gen_t11_lagged_conditional_select(disc_f["name"], mapping, invert=False),
+                predicate_status="pending",
+            ))
+            name_sel_inv = f"{disc_f['name']}_sel_difficulty_lag_w2"
+            out.append(CandidateFactor(
+                name=name_sel_inv,
+                description=f"Previous trial inverted continuous value selected by {disc_f['name']}",
+                factor_type="window",
+                factor_class="continuous",
+                window_width=2,
+                levels=[],
+                depends_on=[disc_f["name"]] + cont_names,
+                round_num=round_num,
+                compute_code=_gen_t11_lagged_conditional_select(disc_f["name"], mapping, invert=True),
+                predicate_status="pending",
+                priority="task" in disc_f["name"].lower(),
+            ))
+        return out
+
 
 # ---------------------------------------------------------------------------
 # RandomSeeder
@@ -555,17 +664,18 @@ class FactorTemplateLibrary:
 
 class RandomSeeder(SeedingStrategy):
     """
-    Samples from the FactorTemplateLibrary (T1-T8).
+    Samples from the FactorTemplateLibrary (T1-T11).
     Falls back to T9 random partitions when the template pool is exhausted.
     """
 
-    def __init__(self, disc_cfg, seeder_cfg) -> None:
+    def __init__(self, disc_cfg, seeder_cfg, seed: Optional[int] = None) -> None:
         self._disc_cfg = disc_cfg
         self._cfg = seeder_cfg
+        self._seed = seed
         self._library = FactorTemplateLibrary()
 
     def seed(self, context: SearchContext) -> List[CandidateFactor]:
-        rng = random.Random(self._disc_cfg.seed if hasattr(self._disc_cfg, "seed") else None)
+        rng = _rng_for_context(self._seed, context)
         banned = {c.name for c in context.hard_rejected}
         scored_names = {sc.candidate.name for sc in context.all_scored_candidates}
 
@@ -573,10 +683,14 @@ class RandomSeeder(SeedingStrategy):
 
         # Filter already-seen and hard-rejected
         pool = [c for c in all_templates if c.name not in banned and c.name not in scored_names]
+        priority = [c for c in pool if c.priority]
+        pool = [c for c in pool if c not in priority]
 
         seed_multiplier = getattr(self._cfg, "seed_multiplier", 1.0)
         n_want = round(context.n_to_generate * seed_multiplier)
         template_bias = getattr(self._cfg, "template_bias", "uniform")
+        selected = priority[:n_want]
+        n_remaining = max(n_want - len(selected), 0)
 
         if template_bias == "cognitive":
             # Upweight T1 (equality_match) and T3 (repeat_detect), downweight T9
@@ -587,21 +701,22 @@ class RandomSeeder(SeedingStrategy):
             weights = [weight(c) for c in pool]
             total = sum(weights)
             probs = [w / total for w in weights]
-            n_sample = min(n_want, len(pool))
+            n_sample = min(n_remaining, len(pool))
             if n_sample == 0:
-                selected = []
+                sampled = []
             else:
                 indices = rng.choices(range(len(pool)), weights=probs, k=n_sample)
                 seen_idx = set()
-                selected = []
+                sampled = []
                 for i in indices:
                     if i not in seen_idx:
                         seen_idx.add(i)
-                        selected.append(pool[i])
+                        sampled.append(pool[i])
+            selected.extend(sampled)
         else:
             # Uniform sampling without replacement
-            n_sample = min(n_want, len(pool))
-            selected = rng.sample(pool, n_sample) if n_sample > 0 else []
+            n_sample = min(n_remaining, len(pool))
+            selected.extend(rng.sample(pool, n_sample) if n_sample > 0 else [])
 
         # Fallback: T9 random partitions if pool is exhausted
         if len(selected) < n_want:
@@ -628,12 +743,13 @@ class RandomLookupSeeder(SeedingStrategy):
     Discrete factors only.  Window key spaces are capped at max_table_size.
     """
 
-    def __init__(self, disc_cfg, seeder_cfg) -> None:
+    def __init__(self, disc_cfg, seeder_cfg, seed: Optional[int] = None) -> None:
         self._disc_cfg = disc_cfg
         self._cfg = seeder_cfg
+        self._seed = seed
 
     def seed(self, context: SearchContext) -> List[CandidateFactor]:
-        rng = random.Random(self._disc_cfg.seed if hasattr(self._disc_cfg, "seed") else None)
+        rng = _rng_for_context(self._seed, context)
         max_depends = getattr(self._cfg, "max_depends_on", 2)
         max_output_levels = getattr(self._cfg, "max_output_levels", 2)
         max_table_size = getattr(self._cfg, "max_table_size", 64)

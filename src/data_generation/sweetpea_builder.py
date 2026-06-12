@@ -114,6 +114,7 @@ def build_stroop_dataset(
                 tt_raw = exp["task_transition"][t_idx]
                 rows.append({
                     "participant_id":  p_idx,
+                    "block_index":    b_idx,
                     "trial_index":     trial_counter,
                     "task":            exp["task"][t_idx],
                     "color":           exp["color"][t_idx],

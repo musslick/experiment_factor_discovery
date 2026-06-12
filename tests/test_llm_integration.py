@@ -273,21 +273,21 @@ class TestPipelineOneRound:
     @pytest.fixture(scope="class")
     def pipeline_result(self, llm, tmp_path_factory):
         """Run one round and return the registry."""
-        cfg = load_config("config/stroop_benchmark.yaml")
+        cfg = load_config("config/synthetic_stroop_benchmark.yaml")
         # Override for a fast test run
         cfg.discovery.n_rounds = 1
-        cfg.discovery.max_candidates_per_round = 5
+        cfg.discovery.seeding_strategy.n_candidates = 5
         cfg.discovery.sandbox_backend = "subprocess"
         cfg.llm.candidate_temperature = 0.7
         cfg.llm.predicate_temperature = 0.2
 
         # Load the generated input dataset (must exist from generate_data.py)
-        input_path = "data/input/stroop_input.csv"
+        input_path = "data/input/stroop_factor_discovery_input.csv"
         try:
             obs_df = pd.read_csv(input_path)
         except FileNotFoundError:
             pytest.skip(
-                f"{input_path} not found — run `python generate_data.py` first"
+                f"{input_path} not found — run `python generate_data.py --config config/synthetic_stroop_benchmark.yaml` first"
             )
 
         registry = FactorRegistry(baseline_formula="correct ~ 1")

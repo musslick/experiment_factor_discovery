@@ -87,12 +87,19 @@ def _load_data(cfg: BenchmarkConfig, regenerate: bool) -> Tuple[pd.DataFrame, pd
     dg_cfg     = cfg.data_generation
     generator  = get_data_generator(cfg.benchmark_type)
 
-    needs_regen = regenerate or not full_path.exists()
+    needs_regen = regenerate or not full_path.exists() or not input_path.exists()
     if not needs_regen and full_path.exists():
         existing_n = pd.read_csv(full_path, usecols=["participant_id"])["participant_id"].nunique()
         if existing_n != dg_cfg.n_participants:
             print(f"\n  Config specifies {dg_cfg.n_participants} participants but existing data "
                   f"has {existing_n} — regenerating.")
+            needs_regen = True
+
+    if not needs_regen and input_path.exists():
+        existing_cols = set(pd.read_csv(input_path, nrows=1).columns)
+        missing_cols = set(generator.observable_columns) - existing_cols
+        if missing_cols:
+            print(f"\n  Existing input data is missing columns {sorted(missing_cols)} — regenerating.")
             needs_regen = True
 
     if needs_regen:

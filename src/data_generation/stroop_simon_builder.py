@@ -128,6 +128,7 @@ def build_stroop_simon_dataset(
                 rt_raw  = exp["response_transition"][t_idx]
                 rows.append({
                     "participant_id":              p_idx,
+                    "block_index":                b_idx,
                     "trial_index":                 trial_counter,
                     "word":                        exp["word"][t_idx],
                     "color":                       exp["color"][t_idx],

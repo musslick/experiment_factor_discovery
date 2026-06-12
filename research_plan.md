@@ -114,12 +114,12 @@ SweetPea outputs a dataset that already contains all factor columns, with transi
 
 **Step 2: Dataset masking**
 
-The full dataset (all columns) is saved as `data/ground_truth/stroop_full.csv`. The hidden derived-factor columns are then dropped to produce the discovery-challenge input:
+The full dataset (all columns) is saved as `data/ground_truth/stroop_factor_discovery_full.csv`. The hidden derived-factor columns are then dropped to produce the discovery-challenge input:
 
 ```python
 HIDDEN_COLUMNS = ["congruency", "task_transition"]  # extend for full benchmark
 observable_df = full_df.drop(columns=HIDDEN_COLUMNS)
-observable_df.to_csv("data/input/stroop_input.csv", index=False)
+observable_df.to_csv("data/input/stroop_factor_discovery_input.csv", index=False)
 ```
 
 No post-hoc computation of derived factors is required; SweetPea handles all factor values during synthesis.
@@ -178,7 +178,7 @@ The LLM (default: `claude-sonnet-4-6`, configurable) is prompted with:
 - **System prompt**: Explains the two types of derived factors (within-trial and transition), provides complete SweetPea examples showing how Boolean level predicates are written and assembled into a `Factor` definition, specifies the required JSON output schema, and lists constraints (no renamings, no re-proposals of rejected candidates).
 - **User prompt**: Lists current observable factors, already-discovered factors with their descriptions, rejected candidates with reasons, and Stroop task context.
 
-The LLM returns up to `max_candidates_per_round` (default: 8) candidate proposals as a JSON array:
+The active seeding strategy returns up to `seeding_strategy.n_candidates` candidate proposals as a JSON array or precomputed template batch:
 ```json
 [
   {
@@ -259,7 +259,7 @@ The SweetPea factor definition (artifact (b)) is saved alongside the compute fun
 5. Validate that all non-`null` values are strings matching the candidate's declared level names.
 
 Two backends are supported (selectable via config):
-- **Docker** (default): Uses `llm-sandbox` to execute code in a `python:3.9-slim` container, providing strong isolation from the host.
+- **Docker** (optional): Uses `llm-sandbox` to execute code in a `python:3.9-slim` container, providing stronger isolation from the host.
 - **Subprocess** (fallback): Runs in a restricted subprocess with limited imports (`json`, `math`, `itertools`, `functools`, `re`). Adequate for research use when Docker is unavailable.
 
 Any validation failure or timeout triggers the self-correction loop in §5.2.
@@ -310,7 +310,7 @@ Each accepted factor is added to the null formula for all subsequent rounds.
 After the initial batch of candidates is scored, the pipeline feeds the CV results back to the LLM:
 
 1. The top-`k` candidates (by adjusted score) are highlighted.
-2. The LLM proposes a new batch of `candidates_per_refinement` refined or alternative candidates.
+2. The configured evolution strategy proposes a new batch of `evolution_strategy.n_candidates` refined or alternative candidates.
 3. New candidates go through the same synthesis → encoding → CV-scoring pipeline.
 4. This generate → score → refine cycle repeats for up to `max_search_iterations` iterations.
 
@@ -365,12 +365,13 @@ Additional per-factor statistics are recorded:
 experimental_design_search/
 ├── .venv/                             # Python virtual environment
 ├── config/
-│   └── stroop_benchmark.yaml          # Full configuration (see §8)
+│   ├── benchmark.yaml                 # Shared multi-benchmark defaults
+│   └── synthetic_stroop_benchmark.yaml # Stroop configuration (see §8)
 ├── data/
 │   ├── ground_truth/
-│   │   └── stroop_full.csv            # All factors including hidden ones
+│   │   └── stroop_factor_discovery_full.csv            # All factors including hidden ones
 │   └── input/
-│       └── stroop_input.csv           # Observable factors only
+│       └── stroop_factor_discovery_input.csv           # Observable factors only
 ├── src/
 │   ├── data_generation/
 │   │   ├── sweetpea_builder.py        # SweetPea design (all factors) + trial sequence generation
@@ -415,7 +416,7 @@ experimental_design_search/
 
 ## 8. Configuration
 
-All parameters are specified in `config/stroop_benchmark.yaml`:
+All parameters are specified in `config/synthetic_stroop_benchmark.yaml`:
 
 ```yaml
 benchmark:
@@ -438,15 +439,18 @@ data_generation:
 
 discovery:
   n_rounds: 2
-  max_candidates_per_round: 5        # candidates generated in the first iteration
+  max_search_iterations: 3           # total generate→score→evolve cycles per round
   max_synthesis_retries: 2
   sandbox_timeout_seconds: 10
   sandbox_backend: "subprocess"      # "subprocess" (default) | "docker"
   docker_image: "python:3.9-slim"
-  # iterative within-round search
-  candidates_per_refinement: 5       # candidates generated per refinement call
-  max_search_iterations: 3           # total generate→score→refine cycles per round
-  refinement_top_k: 3                # top candidates highlighted to LLM for refinement
+  seeding_strategy:
+    type: "random"
+    n_candidates: 50                 # candidates generated in iteration 0
+  evolution_strategy:
+    type: "llm_genetic"
+    n_candidates: 10                 # candidates generated per evolution iteration
+    top_k: 3                         # top candidates highlighted to the evolver
   stability_weight: 1.0              # λ: penalises high SE in winner selection
   complexity_exponent: 1.0           # exponent on n_params=(n_levels−1) in score denominator
   depends_on_exponent: 0.5           # exponent on n_deps=len(depends_on) in score denominator
@@ -491,7 +495,7 @@ evaluation:
 
 ```
 # requirements.txt
-sweetpea>=0.35.0
+sweetpea>=0.2.13
 anthropic>=0.20.0
 statsmodels>=0.14.0
 scipy>=1.11.0
@@ -499,7 +503,7 @@ pandas>=2.0.0
 numpy>=1.24.0
 pyyaml>=6.0
 patsy>=0.5.6
-llm-sandbox>=0.1.0        # Docker backend
+llm-sandbox[docker]>=0.3.39  # optional Docker backend
 ```
 
 **Environment setup:**
@@ -507,11 +511,13 @@ llm-sandbox>=0.1.0        # Docker backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# Optional, only for sandbox_backend: docker
+pip install -r requirements-docker.txt
 ```
 
 **Running the benchmark:**
 ```bash
-python run_benchmark.py --config config/stroop_benchmark.yaml
+python run_benchmark.py --config config/synthetic_stroop_benchmark.yaml
 ```
 
 ---
@@ -548,7 +554,7 @@ python run_benchmark.py --config config/stroop_benchmark.yaml
 |----------|--------|-----------|
 | Experiment design language | SweetPea | Declarative, maps directly to predicate synthesis; established in cognitive science |
 | LLM for synthesis | Claude (Anthropic API) | Strong code generation; configurable per run |
-| Sandbox | Docker via llm-sandbox | Security isolation for LLM-generated code; subprocess fallback for convenience |
+| Sandbox | Docker via llm-sandbox[docker] | Security isolation for LLM-generated code; subprocess fallback for convenience |
 | Statistical scoring | Participant-wise CV logistic regression | Avoids overfitting; marginal LL improvement is interpretable; complexity-adjusted winner selection controls for spurious multi-level factors |
 | Factor matching | Bijection via Hungarian algorithm | Handles arbitrary LLM level naming; exact matching with configurable tolerance |
 | Trial generation | UniformCombinatoricSamplingStrategy | No Docker SAT server required; fully local and reproducible |

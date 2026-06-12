@@ -26,7 +26,7 @@ subprocess (default)
 docker
     Runs the harness inside a ``python:3.9-slim`` container via llm-sandbox.
     Data is embedded directly in the script (no stdin required).  Requires
-    Docker daemon and ``pip install llm-sandbox``.
+    Docker daemon and ``pip install -r requirements-docker.txt``.
 """
 
 import json
@@ -71,13 +71,13 @@ window_width = data.get('window_width', 2)
 n            = data['n']
 
 results = [None] * n
-by_pid  = collections.defaultdict(list)
+by_group = collections.defaultdict(list)
 for row in rows:
-    by_pid[row['participant_id']].append(row)
+    by_group[(row['participant_id'], row.get('block_index', -1))].append(row)
 
 try:
-    for pid in sorted(by_pid.keys()):
-        p_rows = sorted(by_pid[pid], key=lambda r: r['trial_index'])
+    for group_key in sorted(by_group.keys()):
+        p_rows = sorted(by_group[group_key], key=lambda r: r['trial_index'])
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
@@ -110,13 +110,13 @@ window_width = data.get('window_width', 2)
 n            = data['n']
 
 results = [None] * n
-by_pid  = collections.defaultdict(list)
+by_group = collections.defaultdict(list)
 for row in rows:
-    by_pid[row['participant_id']].append(row)
+    by_group[(row['participant_id'], row.get('block_index', -1))].append(row)
 
 try:
-    for pid in sorted(by_pid.keys()):
-        p_rows = sorted(by_pid[pid], key=lambda r: r['trial_index'])
+    for group_key in sorted(by_group.keys()):
+        p_rows = sorted(by_group[group_key], key=lambda r: r['trial_index'])
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
@@ -159,6 +159,8 @@ def _serialize_df(
     """
     if keep_cols is not None:
         required = {"participant_id", "trial_index"}
+        if "block_index" in df.columns:
+            required.add("block_index")
         cols = [c for c in keep_cols if c in df.columns]
         cols = list(dict.fromkeys([c for c in required if c in df.columns] + cols))
         df = df[cols]
@@ -240,6 +242,7 @@ def _run_docker(
     timeout_seconds: int,
     window_width: int = 2,
     keep_cols: Optional[List[str]] = None,
+    docker_image: str = "python:3.9-slim",
 ) -> SandboxResult:
     try:
         from llm_sandbox import SandboxSession  # type: ignore
@@ -247,8 +250,8 @@ def _run_docker(
         return SandboxResult(
             success=False, values=None, error_type="runtime_error",
             error_message=(
-                "llm-sandbox is not installed. "
-                "Run: pip install llm-sandbox"
+                "llm-sandbox Docker backend is not installed. "
+                "Run: pip install -r requirements-docker.txt"
             ),
         )
 
@@ -259,8 +262,8 @@ def _run_docker(
     )
 
     try:
-        with SandboxSession(lang="python", verbose=False) as session:
-            result = session.run(harness_src)
+        with SandboxSession(lang="python", verbose=False, image=docker_image) as session:
+            result = session.run(harness_src, timeout=timeout_seconds)
     except Exception as exc:
         return SandboxResult(success=False, values=None,
                              error_type="runtime_error",
@@ -295,6 +298,7 @@ def run_predicate(
     backend: str = "subprocess",
     window_width: int = 2,
     depends_on: Optional[List[str]] = None,
+    docker_image: str = "python:3.9-slim",
 ) -> SandboxResult:
     """
     Execute ``predicate_code`` against ``df`` and return level assignments.
@@ -315,6 +319,7 @@ def run_predicate(
                       provided, only these columns (plus the mandatory
                       participant_id and trial_index) are serialised and sent
                       to the subprocess, reducing payload size and parse time.
+    docker_image    : Container image used when ``backend="docker"``.
 
     Returns
     -------
@@ -331,5 +336,13 @@ def run_predicate(
     keep_cols = list(depends_on) if depends_on is not None else None
 
     if backend == "docker":
-        return _run_docker(predicate_code, df, factor_type, timeout_seconds, window_width, keep_cols)
+        return _run_docker(
+            predicate_code,
+            df,
+            factor_type,
+            timeout_seconds,
+            window_width,
+            keep_cols,
+            docker_image,
+        )
     return _run_subprocess(predicate_code, df, factor_type, timeout_seconds, window_width, keep_cols)

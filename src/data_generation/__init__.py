@@ -18,7 +18,7 @@ import pandas as pd
 class StroopDataGenerator(BenchmarkDataGenerator):
     @property
     def observable_columns(self) -> List[str]:
-        return ["participant_id", "trial_index", "task", "color", "word", "correct"]
+        return ["participant_id", "block_index", "trial_index", "task", "color", "word", "correct"]
 
     def build_dataset(self, n_participants, n_blocks_per_participant, seed):
         from src.data_generation.sweetpea_builder import build_stroop_dataset
@@ -29,7 +29,7 @@ class StroopSimonDataGenerator(BenchmarkDataGenerator):
     @property
     def observable_columns(self) -> List[str]:
         return [
-            "participant_id", "trial_index",
+            "participant_id", "block_index", "trial_index",
             "word", "color", "stimulus_location", "correct_response",
             "correct",
         ]
@@ -42,7 +42,7 @@ class RDKDataGenerator(BenchmarkDataGenerator):
     @property
     def observable_columns(self) -> List[str]:
         return [
-            "participant_id", "trial_index",
+            "participant_id", "block_index", "trial_index",
             "task", "motion", "color", "orientation",
             "motion_coherence", "color_coherence", "orientation_coherence",
             "correct_response",

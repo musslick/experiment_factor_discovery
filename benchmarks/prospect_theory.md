@@ -121,4 +121,4 @@ This benchmark is qualitatively different from the accuracy benchmarks:
 
 ## Config file
 
-`config/prospect_theory_benchmark.yaml`
+`config/synthetic_prospect_theory_benchmark.yaml`

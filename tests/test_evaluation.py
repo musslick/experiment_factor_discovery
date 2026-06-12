@@ -302,7 +302,7 @@ class TestBijectionMatching:
 # TestOracleEvaluation
 # ---------------------------------------------------------------------------
 
-FULL_CSV = "data/ground_truth/stroop_full.csv"
+FULL_CSV = "data/ground_truth/stroop_factor_discovery_full.csv"
 
 
 @pytest.fixture(scope="module")
@@ -311,7 +311,7 @@ def full_df_gt():
     try:
         return pd.read_csv(FULL_CSV)
     except FileNotFoundError:
-        pytest.skip(f"{FULL_CSV} not found — run `python generate_data.py` first")
+        pytest.skip(f"{FULL_CSV} not found — run `python generate_data.py --config config/synthetic_stroop_benchmark.yaml` first")
 
 
 class TestOracleEvaluation:

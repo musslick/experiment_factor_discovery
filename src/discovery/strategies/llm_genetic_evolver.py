@@ -153,6 +153,22 @@ def _structural_distance(a: CandidateFactor, b: CandidateFactor, max_window: int
     return d
 
 
+def _is_overexpanded_duplicate(child: CandidateFactor, parent: CandidateFactor) -> bool:
+    """True when an offspring keeps a parent's output shape but adds parents."""
+    if child.factor_type != parent.factor_type:
+        return False
+    if child.factor_class != parent.factor_class:
+        return False
+    if child.window_width != parent.window_width:
+        return False
+    if child.levels != parent.levels:
+        return False
+
+    child_deps = set(child.depends_on)
+    parent_deps = set(parent.depends_on)
+    return parent_deps < child_deps
+
+
 def _apply_diversity_guard(
     offspring: List[CandidateFactor],
     population: List[ScoredCandidate],
@@ -168,11 +184,9 @@ def _apply_diversity_guard(
             _structural_distance(child, p, max_window, n_factors) < threshold
             for p in pop_candidates
         )
-        if not is_dup:
+        is_overexpanded = any(_is_overexpanded_duplicate(child, p) for p in pop_candidates)
+        if not is_dup and not is_overexpanded:
             kept.append(child)
-        else:
-            # Keep it but note it's structurally redundant; scorer will handle it
-            kept.append(child)  # include anyway — let CV scoring decide
     return kept
 
 
