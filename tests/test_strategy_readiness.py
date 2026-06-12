@@ -65,9 +65,13 @@ def _rdk_template(name: str):
     return next(c for c in candidates if c.name == name)
 
 
-def _with_task_transition(context: SearchContext) -> SearchContext:
+def _with_task_transition(
+    context: SearchContext,
+    name: str = "task_transition_w2",
+    column_name: str = "task_transition_w2",
+) -> SearchContext:
     transition = CandidateFactor(
-        name="task_transition_w2",
+        name=name,
         description="",
         factor_type="window",
         factor_class="discrete",
@@ -78,7 +82,7 @@ def _with_task_transition(context: SearchContext) -> SearchContext:
     context.discovered_factors = [
         DiscoveredFactor(
             candidate=transition,
-            column_name="task_transition_w2",
+            column_name=column_name,
             column_values=pd.Series([], dtype=object),
             lrt_statistic=0.0,
             lrt_pvalue=1.0,
@@ -240,6 +244,18 @@ def test_random_seeder_defers_generic_width3_partitions_until_transition_is_disc
 
     assert "n2_task_inhibition" not in after_names
     assert any(c.name.startswith("task_eqpart_w3_") for c in after)
+
+
+def test_generic_width3_gate_uses_discovered_window_structure_not_name():
+    context = _with_task_transition(
+        _rdk_context(),
+        name="renamed_task_switch_factor",
+        column_name="renamed_task_switch_column",
+    )
+
+    candidates = FactorTemplateLibrary().enumerate(context)
+
+    assert any(c.name.startswith("task_eqpart_w3_") for c in candidates)
 
 
 def test_generic_width3_equality_partition_matches_generated_rdk_hidden_n2_factor():

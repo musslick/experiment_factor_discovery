@@ -129,6 +129,22 @@ def _gen_t10_equality_partition(f: str, partition: Tuple[Tuple[str, ...], ...]) 
         """)
 
 
+def _has_discovered_window_factor(
+    discovered_factors: List[object],
+    parent_name: str,
+    window_width: int,
+) -> bool:
+    for discovered in discovered_factors:
+        candidate = getattr(discovered, "candidate", discovered)
+        if candidate.factor_type != "window":
+            continue
+        if candidate.window_width != window_width:
+            continue
+        if candidate.depends_on == [parent_name]:
+            return True
+    return False
+
+
 def _gen_t6(f: str, level: str) -> str:
     return textwrap.dedent(f"""\
         def compute_factor(window: list) -> float:
@@ -302,15 +318,11 @@ class FactorTemplateLibrary:
         if allow_wt and allow_disc:
             candidates.extend(self._t1(discrete_obs, context.round_num))
             candidates.extend(self._t2(discrete_obs, context.round_num))
-        discovered_names = {
-            getattr(d, "column_name", d.candidate.name)
-            for d in context.discovered_factors
-        }
         if allow_win and allow_disc:
             candidates.extend(self._t3(discrete_obs, context.max_window_width, context.round_num))
             candidates.extend(self._t4(discrete_obs, context.round_num))
             candidates.extend(self._t5(discrete_obs, context.max_window_width, context.round_num))
-            candidates.extend(self._t10(discrete_obs, context.max_window_width, context.round_num, discovered_names))
+            candidates.extend(self._t10(discrete_obs, context.max_window_width, context.round_num, context.discovered_factors))
         if allow_win and allow_cont:
             # T6: proportion of discrete levels — no continuous parent required
             candidates.extend(self._t6(discrete_obs, context.max_window_width, context.round_num))
@@ -492,7 +504,7 @@ class FactorTemplateLibrary:
         discrete_obs: List[dict],
         max_width: int,
         round_num: int,
-        discovered_names: set,
+        discovered_factors: List[object],
     ) -> List[CandidateFactor]:
         if max_width < 3:
             return []
@@ -500,7 +512,7 @@ class FactorTemplateLibrary:
         for f in discrete_obs:
             if len(f.get("levels", [])) < 3:
                 continue
-            if f"{f['name']}_transition_w2" not in discovered_names:
+            if not _has_discovered_window_factor(discovered_factors, f["name"], window_width=2):
                 continue
             for partition in _t10_partitions():
                 partition_key = "|".join(",".join(group) for group in partition)
