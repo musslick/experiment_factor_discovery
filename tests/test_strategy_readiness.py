@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from src.discovery.factor_registry import CandidateFactor
+from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor
 from src.discovery.sandbox import run_predicate
 from src.discovery.strategies import build_seeding_strategy
 from src.discovery.strategies.base import ScoredCandidate, SearchContext
@@ -38,11 +38,6 @@ def _context(iteration: int = 0) -> SearchContext:
     )
 
 
-def _n2_template():
-    candidates = FactorTemplateLibrary().enumerate(_context())
-    return next(c for c in candidates if c.name == "n2_task_inhibition")
-
-
 def _rdk_context() -> SearchContext:
     cfg = load_config("config/synthetic_rdk_task_switching_benchmark.yaml")
     return SearchContext(
@@ -70,15 +65,97 @@ def _rdk_template(name: str):
     return next(c for c in candidates if c.name == name)
 
 
-def test_task_n2_template_matches_aba_cba_other_patterns():
-    candidate = _n2_template()
+def _with_task_transition(context: SearchContext) -> SearchContext:
+    transition = CandidateFactor(
+        name="task_transition_w2",
+        description="",
+        factor_type="window",
+        factor_class="discrete",
+        window_width=2,
+        levels=["repeat", "switch"],
+        depends_on=["task"],
+    )
+    context.discovered_factors = [
+        DiscoveredFactor(
+            candidate=transition,
+            column_name="task_transition_w2",
+            column_values=pd.Series([], dtype=object),
+            lrt_statistic=0.0,
+            lrt_pvalue=1.0,
+            lrt_dof=0,
+            formula_with="",
+        )
+    ]
+    return context
+
+
+def _is_missing(value) -> bool:
+    return value is None or pd.isna(value)
+
+
+def _same_partition(actual, expected) -> bool:
+    """Return True when two sequences are identical up to level relabeling."""
+    actual_to_expected = {}
+    expected_to_actual = {}
+    for actual_value, expected_value in zip(actual, expected):
+        actual_missing = _is_missing(actual_value)
+        expected_missing = _is_missing(expected_value)
+        if actual_missing or expected_missing:
+            if actual_missing != expected_missing:
+                return False
+            continue
+        if actual_value in actual_to_expected and actual_to_expected[actual_value] != expected_value:
+            return False
+        if expected_value in expected_to_actual and expected_to_actual[expected_value] != actual_value:
+            return False
+        actual_to_expected[actual_value] = expected_value
+        expected_to_actual[expected_value] = actual_value
+    return True
+
+
+def _generic_n2_candidate(context: SearchContext, df: pd.DataFrame, expected):
+    candidates = FactorTemplateLibrary().enumerate(context)
+    assert all("n2_task_inhibition" not in c.name for c in candidates)
+    for candidate in candidates:
+        if candidate.factor_type != "window":
+            continue
+        if candidate.factor_class != "discrete":
+            continue
+        if candidate.window_width != 3:
+            continue
+        if candidate.depends_on != ["task"]:
+            continue
+        result = run_predicate(
+            candidate.compute_code,
+            df,
+            candidate.factor_type,
+            window_width=candidate.window_width,
+            depends_on=candidate.depends_on,
+        )
+        if result.success and _same_partition(result.values, expected):
+            return candidate
+    raise AssertionError("No generic task equality-partition candidate matched n2")
+
+
+def test_generic_width3_equality_partition_can_represent_task_n2_patterns():
     df = pd.DataFrame(
         [
             {"participant_id": 1, "trial_index": i, "task": task}
             for i, task in enumerate(["A", "B", "A", "C", "C", "A", "B", "A"])
         ]
     )
+    expected = [
+        None,
+        None,
+        "aba_return",
+        "cba_nonreturn",
+        "other",
+        "other",
+        "cba_nonreturn",
+        "aba_return",
+    ]
 
+    candidate = _generic_n2_candidate(_with_task_transition(_context()), df, expected)
     result = run_predicate(
         candidate.compute_code,
         df,
@@ -88,50 +165,94 @@ def test_task_n2_template_matches_aba_cba_other_patterns():
     )
 
     assert result.success, result.error_message
-    assert candidate.levels == ["aba_return", "cba_nonreturn", "other"]
+    assert candidate.name.startswith("task_eqpart_w3_")
+    assert candidate.levels == ["level_1", "level_2", "level_3"]
     assert candidate.priority
-    assert result.values == [
-        None,
-        None,
-        "aba_return",
-        "cba_nonreturn",
-        "other",
-        "other",
-        "cba_nonreturn",
-        "aba_return",
-    ]
+    assert _same_partition(result.values, expected)
 
 
-def test_random_seeder_prioritizes_task_n2_template():
+def test_random_seeder_includes_generic_task_n2_partition_without_named_template():
     context = _context()
-    context.n_to_generate = 1
+    context.n_to_generate = 50
     seeder_cfg = SimpleNamespace(seed_multiplier=1.0, template_bias="uniform")
-
-    candidates = RandomSeeder(None, seeder_cfg, seed=42).seed(context)
-
-    assert [c.name for c in candidates] == ["n2_task_inhibition"]
-
-
-def test_random_seeder_prioritizes_rdk_carryover_template():
-    context = _rdk_context()
-    context.n_to_generate = 2
-    seeder_cfg = SimpleNamespace(seed_multiplier=1.0, template_bias="uniform")
-
-    candidates = RandomSeeder(None, seeder_cfg, seed=42).seed(context)
-
-    assert [c.name for c in candidates] == [
-        "n2_task_inhibition",
-        "task_sel_difficulty_lag_w2",
+    df = pd.DataFrame(
+        [
+            {"participant_id": 1, "trial_index": i, "task": task}
+            for i, task in enumerate(["A", "B", "A", "C", "C", "A", "B", "A"])
+        ]
+    )
+    expected = [
+        None,
+        None,
+        "aba_return",
+        "cba_nonreturn",
+        "other",
+        "other",
+        "cba_nonreturn",
+        "aba_return",
     ]
 
+    context = _with_task_transition(context)
+    candidates = RandomSeeder(None, seeder_cfg, seed=42).seed(context)
 
-def test_task_n2_template_matches_generated_rdk_hidden_factor():
+    assert all("n2_task_inhibition" not in c.name for c in candidates)
+    assert any(
+        c.depends_on == ["task"]
+        and c.window_width == 3
+        and c.factor_class == "discrete"
+        and run_predicate(
+            c.compute_code,
+            df,
+            c.factor_type,
+            window_width=c.window_width,
+            depends_on=c.depends_on,
+        ).success
+        and _same_partition(
+            run_predicate(
+                c.compute_code,
+                df,
+                c.factor_type,
+                window_width=c.window_width,
+                depends_on=c.depends_on,
+            ).values,
+            expected,
+        )
+        for c in candidates
+    )
+
+
+def test_random_seeder_defers_generic_width3_partitions_until_transition_is_discovered():
+    context = _rdk_context()
+    context.n_to_generate = 50
+    seeder_cfg = SimpleNamespace(seed_multiplier=1.0, template_bias="uniform")
+
+    before = RandomSeeder(None, seeder_cfg, seed=42).seed(context)
+    before_names = {c.name for c in before}
+
+    assert "task_transition_w2" in before_names
+    assert "task_sel_difficulty" in before_names
+    assert "task_sel_difficulty_lag_w2" in before_names
+    assert not any(c.name.startswith("task_eqpart_w3_") for c in before)
+
+    context = _with_task_transition(context)
+    after = RandomSeeder(None, seeder_cfg, seed=42).seed(context)
+    after_names = {c.name for c in after}
+
+    assert "n2_task_inhibition" not in after_names
+    assert any(c.name.startswith("task_eqpart_w3_") for c in after)
+
+
+def test_generic_width3_equality_partition_matches_generated_rdk_hidden_n2_factor():
     cfg = load_config("config/synthetic_rdk_task_switching_benchmark.yaml")
     cfg.data_generation.n_participants = 1
     cfg.data_generation.n_blocks_per_participant = 2
     cfg.seed = 123
     full_df, input_df = get_data_generator(cfg.benchmark_type).generate(cfg)
-    candidate = _n2_template()
+    expected = [
+        None if pd.isna(value) else value
+        for value in full_df["n2_task_inhibition"].tolist()
+    ]
+    candidate = _generic_n2_candidate(_with_task_transition(_rdk_context()), input_df, expected)
 
     result = run_predicate(
         candidate.compute_code,
@@ -140,13 +261,9 @@ def test_task_n2_template_matches_generated_rdk_hidden_factor():
         window_width=candidate.window_width,
         depends_on=candidate.depends_on,
     )
-    expected = [
-        None if pd.isna(value) else value
-        for value in full_df["n2_task_inhibition"].tolist()
-    ]
 
     assert result.success, result.error_message
-    assert result.values == expected
+    assert _same_partition(result.values, expected)
 
 
 def test_task_selected_lag_difficulty_template_matches_generated_rdk_hidden_factor():
@@ -252,22 +369,22 @@ def test_genetic_diversity_guard_drops_structural_duplicates():
 
 
 def test_genetic_diversity_guard_drops_same_shape_dependency_expansions():
-    exact_n2 = CandidateFactor(
-        name="n2_task_inhibition",
+    generic_task_partition = CandidateFactor(
+        name="task_eqpart_w3_parent",
         description="",
         factor_type="window",
         factor_class="discrete",
         window_width=3,
-        levels=["aba_return", "cba_nonreturn", "other"],
+        levels=["level_1", "level_2", "level_3"],
         depends_on=["task"],
     )
-    overexpanded_n2 = CandidateFactor(
-        name="n2_task_inhibition_with_coherence",
+    overexpanded_partition = CandidateFactor(
+        name="task_eqpart_w3_with_coherence",
         description="",
         factor_type="window",
         factor_class="discrete",
         window_width=3,
-        levels=["aba_return", "cba_nonreturn", "other"],
+        levels=["level_1", "level_2", "level_3"],
         depends_on=[
             "task",
             "motion_coherence",
@@ -286,7 +403,7 @@ def test_genetic_diversity_guard_drops_same_shape_dependency_expansions():
     )
     population = [
         ScoredCandidate(
-            candidate=exact_n2,
+            candidate=generic_task_partition,
             cv_score_mean=1.0,
             cv_score_se=0.1,
             adjusted_score=1.0,
@@ -294,7 +411,7 @@ def test_genetic_diversity_guard_drops_same_shape_dependency_expansions():
     ]
 
     kept = _apply_diversity_guard(
-        offspring=[overexpanded_n2, genuine_transition],
+        offspring=[overexpanded_partition, genuine_transition],
         population=population,
         max_window=4,
         n_factors=4,

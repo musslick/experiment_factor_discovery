@@ -18,7 +18,7 @@ T6  proportion          window        continuous n/a           1 discrete parent
 T7  continuous_transform within_trial continuous n/a           ≥1 continuous parent (constraint)
 T8  running_stat        window        continuous n/a           ≥1 continuous parent (constraint)
 T9  random_partition    within_trial  discrete   binary        fallback; random lookup table
-T10 n2_task_inhibition  window        discrete   3-level       task ABA / CBA / other pattern
+T10 equality_partition  window        discrete   3-level       sparse width-3 equality-signature partitions
 T11 lagged_select      window        continuous n/a           previous trial selected continuous value
 """
 
@@ -82,17 +82,50 @@ def _gen_t5(f: str) -> str:
         """)
 
 
-def _gen_t10_task_n2(f: str) -> str:
+_T10_SIGNATURES = ("aaa", "aab", "aba", "abb", "abc")
+
+
+def _t10_partitions() -> List[Tuple[Tuple[str, ...], ...]]:
+    """Sparse 3-way partitions of width-3 equality signatures.
+
+    The grammar singles out two equality signatures and groups all remaining
+    signatures into an ``other`` level. Binary repeat/switch atoms are already
+    covered by simpler templates, so T10 focuses on higher-order motifs that
+    need at least three levels.
+    """
+    partitions: List[Tuple[Tuple[str, ...], ...]] = []
+
+    for first_idx, first in enumerate(_T10_SIGNATURES):
+        for second in _T10_SIGNATURES[first_idx + 1:]:
+            other = tuple(sig for sig in _T10_SIGNATURES if sig not in {first, second})
+            partitions.append(((first,), (second,), other))
+
+    return partitions
+
+
+def _gen_t10_equality_partition(f: str, partition: Tuple[Tuple[str, ...], ...]) -> str:
+    lookup = {
+        signature: f"level_{group_idx + 1}"
+        for group_idx, group in enumerate(partition)
+        for signature in group
+    }
+    lookup_repr = repr(lookup)
     return textwrap.dedent(f"""\
         def compute_factor(window: list) -> str:
             two_back = window[0]['{f}']
             previous = window[-2]['{f}']
             current = window[-1]['{f}']
-            if current == two_back and current != previous:
-                return 'aba_return'
-            if current != two_back and current != previous and previous != two_back:
-                return 'cba_nonreturn'
-            return 'other'
+            if two_back == previous == current:
+                signature = 'aaa'
+            elif two_back == previous:
+                signature = 'aab'
+            elif two_back == current:
+                signature = 'aba'
+            elif previous == current:
+                signature = 'abb'
+            else:
+                signature = 'abc'
+            return {lookup_repr}[signature]
         """)
 
 
@@ -269,11 +302,15 @@ class FactorTemplateLibrary:
         if allow_wt and allow_disc:
             candidates.extend(self._t1(discrete_obs, context.round_num))
             candidates.extend(self._t2(discrete_obs, context.round_num))
+        discovered_names = {
+            getattr(d, "column_name", d.candidate.name)
+            for d in context.discovered_factors
+        }
         if allow_win and allow_disc:
             candidates.extend(self._t3(discrete_obs, context.max_window_width, context.round_num))
             candidates.extend(self._t4(discrete_obs, context.round_num))
             candidates.extend(self._t5(discrete_obs, context.max_window_width, context.round_num))
-            candidates.extend(self._t10(discrete_obs, context.max_window_width, context.round_num))
+            candidates.extend(self._t10(discrete_obs, context.max_window_width, context.round_num, discovered_names))
         if allow_win and allow_cont:
             # T6: proportion of discrete levels — no continuous parent required
             candidates.extend(self._t6(discrete_obs, context.max_window_width, context.round_num))
@@ -409,6 +446,7 @@ class FactorTemplateLibrary:
                     round_num=round_num,
                     compute_code=_gen_t3(f["name"]),
                     predicate_status="pending",
+                    priority="task" in f["name"].lower() and w == 2,
                 ))
         return out
 
@@ -449,30 +487,46 @@ class FactorTemplateLibrary:
                 ))
         return out
 
-    def _t10(self, discrete_obs: List[dict], max_width: int, round_num: int) -> List[CandidateFactor]:
+    def _t10(
+        self,
+        discrete_obs: List[dict],
+        max_width: int,
+        round_num: int,
+        discovered_names: set,
+    ) -> List[CandidateFactor]:
         if max_width < 3:
             return []
         out = []
         for f in discrete_obs:
-            if "task" not in f["name"].lower() or len(f.get("levels", [])) < 3:
+            if len(f.get("levels", [])) < 3:
                 continue
-            name = f"n2_{f['name']}_inhibition"
-            out.append(CandidateFactor(
-                name=name,
-                description=(
-                    f"Three-trial {f['name']} sequence pattern: ABA return, "
-                    "CBA non-return, or other"
-                ),
-                factor_type="window",
-                factor_class="discrete",
-                window_width=3,
-                levels=["aba_return", "cba_nonreturn", "other"],
-                depends_on=[f["name"]],
-                round_num=round_num,
-                compute_code=_gen_t10_task_n2(f["name"]),
-                predicate_status="pending",
-                priority=True,
-            ))
+            if f"{f['name']}_transition_w2" not in discovered_names:
+                continue
+            for partition in _t10_partitions():
+                partition_key = "|".join(",".join(group) for group in partition)
+                partition_hash = hashlib.md5(partition_key.encode()).hexdigest()[:6]
+                name = f"{f['name']}_eqpart_w3_{partition_hash}"
+                levels = [f"level_{idx + 1}" for idx in range(len(partition))]
+                groups_desc = "; ".join(
+                    f"level_{idx + 1}={{{','.join(group)}}}"
+                    for idx, group in enumerate(partition)
+                )
+                out.append(CandidateFactor(
+                    name=name,
+                    description=(
+                        f"Generic width-3 equality-pattern partition over {f['name']}: "
+                        f"{groups_desc}"
+                    ),
+                    factor_type="window",
+                    factor_class="discrete",
+                    window_width=3,
+                    levels=levels,
+                    depends_on=[f["name"]],
+                    round_num=round_num,
+                    compute_code=_gen_t10_equality_partition(f["name"], partition),
+                    predicate_status="pending",
+                    priority="task" in f["name"].lower() and len(partition) == 3,
+                ))
         return out
 
     def _t6(self, discrete_obs: List[dict], max_width: int, round_num: int) -> List[CandidateFactor]:
@@ -578,6 +632,7 @@ class FactorTemplateLibrary:
                     round_num=round_num,
                     compute_code=_gen_t7_conditional_select_inv(disc_f["name"], mapping),
                     predicate_status="pending",
+                    priority="task" in disc_f["name"].lower(),
                 ))
         return out
 
