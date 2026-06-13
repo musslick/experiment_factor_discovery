@@ -1,0 +1,49 @@
+benchmark:
+  name: "prospect_theory_factor_discovery"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/empirical_prospect_theory_brooks_et_al_extended.csv"
+  participant_id_column: "subject_id"
+  n_participants: 234
+  outcome_variable: "choice"
+  extra_columns: ["trial", "consecutive_nos_before"]
+  null_formula: "choice ~ C + C(riskyGain) + C(riskyLoss) + C(risk_probability)"
+  full_formula: "choice ~ C + C(riskyGain) + C(riskyLoss) + C(risk_probability) + C(previous_outcome)"
+  task_context: |
+    Participants are tasked to choose between a risky gamble to either get points awarded or deducted
+    (presented on the left side, choice==1) and a safe option (presented on the right side, choice==0) 
+    which rewards them with 0. The expected value for the risky gamble could be a positive or a negative
+    value.
+  base_factors:
+    - {name: riskyGain,              dtype: continuous}
+    - {name: riskyLoss,              dtype: continuous}
+    # - {name: risk_probability,       dtype: continuous}
+
+  hidden_factors:
+    - name: "previous_outcome"
+      type: "within_trial"
+      factor_class: "continuous"
+    - name: "previous_choice"
+      type: "within_trial"
+      factor_class: "discrete"
+      levels: [0, 1]
+    - name: "expected_value"
+      type: "within_trial"
+      factor_class: "continuous"
+
+discovery:
+  allowed_factor_classes: ["discrete", "continuous"]
+  sandbox_timeout_seconds: 30
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: choice   # secondary — must be a 0/1 column in the CSV
+      type: binary
+
+# No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.
