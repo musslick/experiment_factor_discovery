@@ -65,6 +65,10 @@ discovery:
   decomposition_check_enabled: true
   decomposition_check_max_arity: 2
 
+  # ── Contrast search (Phase 1b — level-vs-rest factors) ────────────────────
+  run_contrast_search: true
+  max_contrasts_per_candidate: 8
+
   # ── Effect search (Phase 2 — interaction terms) ────────────────────────────
   run_effect_search: true
   max_interaction_order: 2

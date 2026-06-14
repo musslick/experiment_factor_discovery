@@ -312,6 +312,8 @@ def run_single_benchmark(
             "discovered_factors": [
                 {"name":                   f.column_name,
                  "validation_improvement": f.validation_improvement,
+                 "contrast_of":            f.candidate.contrast_of,
+                 "contrast_positive_levels": f.candidate.contrast_positive_levels,
                  "formula":                f.formula_with,
                  "sweetpea_code":          f.candidate.sweetpea_code,
                  "compute_code":           f.candidate.compute_code,

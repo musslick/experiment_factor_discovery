@@ -1,9 +1,10 @@
 """
 Integration regression for the deterministic seeded RDK discovery path.
 
-This intentionally disables LLM evolution and effect search. It verifies the
-headline result for the template-seeded path: random-template seeding plus the
-statistical pipeline recovers the RDK hidden factors without any model calls.
+This intentionally disables LLM evolution, contrast search, and effect search.
+It verifies the headline result for the template-seeded path: random-template
+seeding plus the statistical pipeline recovers the RDK hidden factors without
+any model calls.
 """
 
 import pytest
@@ -27,6 +28,7 @@ def test_seeded_rdk_pipeline_recovers_hidden_factors(tmp_path):
     )
     cfg.discovery.n_rounds = 4
     cfg.discovery.max_search_iterations = 1
+    cfg.discovery.run_contrast_search = False
     cfg.discovery.run_effect_search = False
 
     assert cfg.discovery.seeding_strategy.type == "random"
