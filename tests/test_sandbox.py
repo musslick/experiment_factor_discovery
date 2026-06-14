@@ -196,6 +196,20 @@ class TestWindow:
         for v in result.values:
             assert v in {None, "repeat", "switch"}
 
+
+    def test_window_resets_at_block_boundaries(self):
+        df = pd.DataFrame([
+            {"participant_id": 1, "block_index": 0, "trial_index": 0, "task": "A"},
+            {"participant_id": 1, "block_index": 0, "trial_index": 1, "task": "B"},
+            {"participant_id": 1, "block_index": 1, "trial_index": 2, "task": "B"},
+            {"participant_id": 1, "block_index": 1, "trial_index": 3, "task": "B"},
+        ])
+
+        result = run_predicate(TASK_TRANS_CODE, df, "window", window_width=2)
+
+        assert result.success
+        assert result.values == [None, "switch", None, "repeat"]
+
     def test_transition_alias_still_works(self, small_df):
         """'transition' is accepted as a backward-compatible alias for 'window' width=2."""
         result = run_predicate(TASK_TRANS_CODE, small_df, "transition")

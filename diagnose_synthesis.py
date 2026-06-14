@@ -47,9 +47,10 @@ CANDIDATES = {
     "task_transition": CandidateFactor(
         name="task_transition",
         description="Whether the task repeated or switched from the previous trial",
-        factor_type="transition",
+        factor_type="window",
         levels=["repeat", "switch"],
         depends_on=["task"],
+        window_width=2,
     ),
 }
 
@@ -117,7 +118,7 @@ def _try_parse(raw: str):
 # Main diagnosis routine
 # ---------------------------------------------------------------------------
 
-def diagnose(factor_name: str, model: str, backend: str) -> bool:
+def diagnose(factor_name: str, model: str, backend: str, docker_image: str) -> bool:
     candidate = CANDIDATES[factor_name]
     df        = _make_df()
 
@@ -133,15 +134,22 @@ def diagnose(factor_name: str, model: str, backend: str) -> bool:
     # ------------------------------------------------------------------
     _sep("1 / 7  Sandbox self-test")
     _trivial = "def compute_factor(trial):\n    return 'ok'"
-    sr = run_predicate(_trivial, df, "within_trial", timeout_seconds=10, backend=backend)
+    sr = run_predicate(
+        _trivial,
+        df,
+        "within_trial",
+        timeout_seconds=10,
+        backend=backend,
+        docker_image=docker_image,
+    )
     if not sr.success:
         _fail(f"Sandbox backend '{backend}' is broken: "
               f"[{sr.error_type}] {sr.error_message}")
         if backend == "docker":
-            print("\n  Hint: install llm-sandbox with  pip install llm-sandbox")
+            print("\n  Hint: install Docker support with  pip install \"llm-sandbox[docker]\"")
             print("        and make sure the Docker daemon is running.")
         return False
-    _ok(f"Backend '{backend}' works — trivial predicate executed in subprocess")
+    _ok(f"Backend '{backend}' works — trivial predicate executed")
 
     # ------------------------------------------------------------------
     # Step 2: Prompt building
@@ -151,12 +159,25 @@ def diagnose(factor_name: str, model: str, backend: str) -> bool:
     system       = (prompt_dir / "predicate_synthesis_system.txt").read_text()
     user_tmpl    = (prompt_dir / "predicate_synthesis_user.txt").read_text()
 
+    window_width_line = (
+        f"Window width: {candidate.window_width}"
+        if candidate.factor_type == "window"
+        else ""
+    )
+    observable_factor_descriptions = (
+        '  task  : "color_naming" | "word_reading"\n'
+        '  color : "red" | "blue" | "green"\n'
+        '  word  : "red" | "blue" | "green"'
+    )
     subs = dict(
         name=candidate.name,
         factor_type=candidate.factor_type,
+        factor_class=candidate.factor_class,
+        window_width_line=window_width_line,
         description=candidate.description,
         levels=str(candidate.levels),
         depends_on=str(candidate.depends_on),
+        observable_factor_descriptions=observable_factor_descriptions,
         discovered_section="",
         error_section="",
     )
@@ -213,8 +234,15 @@ def diagnose(factor_name: str, model: str, backend: str) -> bool:
     # Step 6: Sandbox execution
     # ------------------------------------------------------------------
     _sep("6 / 7  Sandbox execution")
-    sr = run_predicate(code, df, candidate.factor_type,
-                       timeout_seconds=10, backend=backend)
+    sr = run_predicate(
+        code,
+        df,
+        candidate.factor_type,
+        timeout_seconds=10,
+        backend=backend,
+        window_width=candidate.window_width,
+        docker_image=docker_image,
+    )
     if not sr.success:
         _fail(f"[{sr.error_type}]")
         _block("Error message", sr.error_message or "(no message)")
@@ -241,7 +269,7 @@ def diagnose(factor_name: str, model: str, backend: str) -> bool:
     _ok(f"Level membership check passed: {returned}")
 
     none_count = sum(1 for v in sr.values if v is None)
-    _info(f"None values (transition block-starts): {none_count}")
+    _info(f"None values: {none_count}")
 
     # ------------------------------------------------------------------
     # Summary
@@ -257,7 +285,7 @@ def diagnose(factor_name: str, model: str, backend: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    cfg = load_config("config/stroop_benchmark.yaml")
+    cfg = load_config("config/synthetic_stroop_benchmark.yaml")
 
     parser = argparse.ArgumentParser(description="Diagnose predicate synthesis")
     parser.add_argument("--factor",  default="congruency",
@@ -267,7 +295,7 @@ def main() -> None:
                         choices=["subprocess", "docker"])
     args = parser.parse_args()
 
-    ok = diagnose(args.factor, args.model, args.backend)
+    ok = diagnose(args.factor, args.model, args.backend, cfg.discovery.docker_image)
     sys.exit(0 if ok else 1)
 
 

@@ -60,6 +60,9 @@ class CandidateFactor:
     accepted: bool = False
     rejection_reason: Optional[str] = None
     coarsening_of: Optional[List[str]] = None  # set when candidate is a coarsening of a Cartesian product
+    priority: bool = False
+    contrast_of: Optional[str] = None
+    contrast_positive_levels: List[str] = field(default_factory=list)
 
 
 @dataclass

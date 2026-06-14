@@ -57,6 +57,11 @@ matrix).
 | `past_stimulus_difficulty` | window (width=2) | continuous | `1 − coherence_of_previous_task`.  NaN on the first trial of each block. |
 | `n2_task_inhibition` | window (width=3) | discrete | `aba_return` if the current task equals the task 2-back (and differs from 1-back); `cba_nonreturn` if all three tasks differ; `other` otherwise. |
 
+Implementation note: `past_stimulus_difficulty` is block-local, matching SweetPea
+window semantics. Earlier generated RDK data shifted this value across an entire
+participant sequence, which contradicted the benchmark specification above by carrying
+difficulty across block boundaries.
+
 #### `current_stimulus_difficulty` derivation
 
 ```
@@ -107,4 +112,4 @@ hidden factors, and factors that require multi-trial windows (width 2 and 3).
 
 ## Config file
 
-`config/rdk_task_switching_benchmark.yaml`
+`config/synthetic_rdk_task_switching_benchmark.yaml`

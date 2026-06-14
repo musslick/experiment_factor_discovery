@@ -143,10 +143,10 @@ class TestSyntheticBackwardsCompat:
 # ---------------------------------------------------------------------------
 
 class TestBaselineFormula:
-    def test_auto_built_from_base_factors(self):
+    def test_empirical_null_formula_used(self):
         cfg = load_config(EMPIRICAL_CFG)
         formula = _build_baseline_formula(cfg)
-        assert formula == "accuracy ~ C(color) + C(word)"
+        assert formula == "np.log(latency) ~ C(color) + C(word)"
 
     def test_null_formula_override(self):
         cfg = load_config(EMPIRICAL_CFG)

@@ -87,12 +87,19 @@ def _load_data(cfg: BenchmarkConfig, regenerate: bool) -> Tuple[pd.DataFrame, pd
     dg_cfg     = cfg.data_generation
     generator  = get_data_generator(cfg.benchmark_type)
 
-    needs_regen = regenerate or not full_path.exists()
+    needs_regen = regenerate or not full_path.exists() or not input_path.exists()
     if not needs_regen and full_path.exists():
         existing_n = pd.read_csv(full_path, usecols=["participant_id"])["participant_id"].nunique()
         if existing_n != dg_cfg.n_participants:
             print(f"\n  Config specifies {dg_cfg.n_participants} participants but existing data "
                   f"has {existing_n} — regenerating.")
+            needs_regen = True
+
+    if not needs_regen and input_path.exists():
+        existing_cols = set(pd.read_csv(input_path, nrows=1).columns)
+        missing_cols = set(generator.observable_columns) - existing_cols
+        if missing_cols:
+            print(f"\n  Existing input data is missing columns {sorted(missing_cols)} — regenerating.")
             needs_regen = True
 
     if needs_regen:
@@ -114,6 +121,42 @@ def _load_data(cfg: BenchmarkConfig, regenerate: bool) -> Tuple[pd.DataFrame, pd
     # Always read input from CSV to guarantee consistent dtypes / column order
     input_df = pd.read_csv(input_path)
     return full_df, input_df
+
+
+def _level_match_to_dict(match):
+    if match is None:
+        return None
+    return {
+        "ground_truth": match.ground_truth_name,
+        "level": match.ground_truth_level,
+        "discovered": match.discovered_name,
+        "discovered_subset": match.discovered_subset,
+        "precision": round(match.precision, 4),
+        "recall": round(match.recall, 4),
+        "f1": round(match.f1, 4),
+        "jaccard": round(match.jaccard, 4),
+        "support": match.support,
+    }
+
+
+def _level_recovery_to_dict(level_recovery):
+    if level_recovery is None:
+        return None
+    return {
+        "threshold": level_recovery.threshold,
+        "recovered_count": level_recovery.recovered_count,
+        "total_count": level_recovery.total_count,
+        "recall": round(level_recovery.recall, 4),
+        "levels": [
+            {
+                "ground_truth": result.ground_truth_name,
+                "level": result.ground_truth_level,
+                "recovered": result.recovered,
+                "best_match": _level_match_to_dict(result.best_match),
+            }
+            for result in level_recovery.level_results
+        ],
+    }
 
 
 def run_single_benchmark(
@@ -218,6 +261,9 @@ def run_single_benchmark(
     print(f"  Precision : {report.precision:.3f}")
     print(f"  Recall    : {report.recall:.3f}")
     print(f"  F1        : {report.f1:.3f}")
+    if report.level_recovery and report.level_recovery.total_count:
+        lr = report.level_recovery
+        print(f"  LevelRec : {lr.recovered_count}/{lr.total_count} ({lr.recall:.3f})")
     print(f"  Matched   : {[(p.ground_truth_name, p.discovered_name, f'{p.agreement_rate:.3f}') for p in report.matched_pairs]}")
     if report.unmatched_ground_truth:
         print(f"  Missed GT : {report.unmatched_ground_truth}")
@@ -262,9 +308,12 @@ def run_single_benchmark(
             ],
             "unmatched_ground_truth": report.unmatched_ground_truth,
             "unmatched_discovered":   report.unmatched_discovered,
+            "level_recovery":         _level_recovery_to_dict(report.level_recovery),
             "discovered_factors": [
                 {"name":                   f.column_name,
                  "validation_improvement": f.validation_improvement,
+                 "contrast_of":            f.candidate.contrast_of,
+                 "contrast_positive_levels": f.candidate.contrast_positive_levels,
                  "formula":                f.formula_with,
                  "sweetpea_code":          f.candidate.sweetpea_code,
                  "compute_code":           f.candidate.compute_code,

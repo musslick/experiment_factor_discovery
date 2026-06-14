@@ -55,6 +55,10 @@ discovery:
   decomposition_check_max_arity: 2    # maximum number of existing factors to consider jointly
                                       # when checking for coarsening (1 = pairwise only)
 
+  # ── Contrast search (Phase 1b — level-vs-rest factors) ────────────────────
+  run_contrast_search: true           # score binary contrasts for valid 3+ level discrete candidates
+  max_contrasts_per_candidate: 8      # maximum level-vs-rest contrasts to derive from one candidate
+
   # ── Effect search (Phase 2 — interaction terms) ────────────────────────────
   run_effect_search: true             # whether to run Phase 2 interaction-term search
   max_interaction_order: 2            # maximum arity of interaction terms to test (2 = pairwise)

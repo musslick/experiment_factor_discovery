@@ -25,6 +25,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For the optional Docker sandbox backend:
+
+```bash
+pip install -r requirements-docker.txt
+```
+
 Copy `.env.example` (or create `.env` directly) and add your key:
 
 ```
@@ -38,12 +44,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 **1. Generate synthetic data**
 
 ```bash
-python generate_data.py --config config/stroop_benchmark.yaml
+python generate_data.py --config config/synthetic_stroop_benchmark.yaml
 ```
 
 Produces:
-- `data/ground_truth/stroop_full.csv` — all columns including hidden factors
-- `data/input/stroop_input.csv` — observable columns only (pipeline input)
+- `data/ground_truth/stroop_factor_discovery_full.csv` — all columns including hidden factors
+- `data/input/stroop_factor_discovery_input.csv` — observable columns only (pipeline input)
 
 **2. Smoke-test the LLM integration**
 
@@ -56,7 +62,7 @@ Runs four checks (API connectivity, candidate generation, within-trial predicate
 **3. Run the full benchmark**
 
 ```bash
-python run_benchmark.py --config config/stroop_benchmark.yaml
+python run_benchmark.py --config config/synthetic_stroop_benchmark.yaml
 ```
 
 Runs the multi-round discovery pipeline on the input data, evaluates against the ground truth, and writes a timestamped report to `results/run_<timestamp>/`.
@@ -80,7 +86,9 @@ Runs the multi-round discovery pipeline on the input data, evaluates against the
 ```
 .
 ├── config/
-│   └── stroop_benchmark.yaml        # All tunable parameters
+│   ├── benchmark.yaml                    # Shared multi-benchmark defaults
+│   ├── discovery.yaml                    # Shared discovery-only defaults
+│   └── synthetic_stroop_benchmark.yaml   # Stroop benchmark-specific parameters
 ├── data/
 │   ├── ground_truth/                # Full dataset (created by generate_data.py)
 │   └── input/                       # Observable-only dataset (pipeline input)
@@ -205,12 +213,12 @@ The function is executed in an isolated subprocess (or Docker container) against
 
 ## Configuration
 
-All parameters live in `config/stroop_benchmark.yaml`:
+All parameters live in `config/synthetic_stroop_benchmark.yaml`:
 
 | Section | Key parameters |
 |---|---|
 | `data_generation` | `n_participants` (100), `n_blocks_per_participant` (11 × 18 = 198 trials/participant), `hidden_factors`, logistic model coefficients |
-| `discovery` | `n_rounds`, `max_candidates_per_round`, `max_synthesis_retries`, `sandbox_backend`; iterative search: `candidates_per_refinement`, `max_search_iterations`, `refinement_top_k`; scoring: `cv_n_folds`, `validation_fraction`, `min_validation_improvement`, `stability_weight`, `complexity_exponent`, `depends_on_exponent` |
+| `discovery` | `n_rounds`, `max_search_iterations`, `max_synthesis_retries`, `sandbox_backend`, `docker_image`; strategy settings: `seeding_strategy.n_candidates`, `evolution_strategy.n_candidates`, `evolution_strategy.top_k`; scoring: `cv_n_folds`, `validation_fraction`, `min_validation_improvement`, `stability_weight`, `complexity_exponent`, `depends_on_exponent` |
 | `llm` | `model` (default `claude-sonnet-4-6`), temperatures for candidate vs predicate generation |
 | `statistical` | `min_level_count` (guards against near-constant factors) |
 | `evaluation` | `ground_truth_factors`, `bijection_threshold`, `ground_truth_interactions` |
@@ -218,7 +226,7 @@ All parameters live in `config/stroop_benchmark.yaml`:
 
 The initial benchmark uses **2 hidden factors** (congruency + task transition). Extend to all 4 by adding `response_transition` and `congruency_sequence` to `hidden_factors` in the config and updating the logistic model coefficients.
 
-**Sandbox backend.** Set `sandbox_backend: subprocess` for local execution (no extra dependencies). Set `sandbox_backend: docker` for stronger isolation via `llm-sandbox` (requires Docker daemon and `pip install llm-sandbox`).
+**Sandbox backend.** Set `sandbox_backend: subprocess` for local execution (no extra dependencies). Set `sandbox_backend: docker` for stronger isolation via `llm-sandbox` (requires Docker daemon and `pip install -r requirements-docker.txt`).
 
 ---
 

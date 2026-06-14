@@ -50,7 +50,7 @@ def _load_small(bm_type, config_path, n_participants=N_PARTICIPANTS, n_blocks=N_
 
 @pytest.fixture(scope="module")
 def stroop_simon_dfs():
-    return _load_small("stroop_simon", "config/stroop_simon_benchmark.yaml")
+    return _load_small("stroop_simon", "config/synthetic_stroop_simon_benchmark.yaml")
 
 
 class TestStroopSimonStructure:
@@ -64,7 +64,7 @@ class TestStroopSimonStructure:
 
     def test_observable_columns(self, stroop_simon_dfs):
         _, input_df = stroop_simon_dfs
-        expected = {"participant_id", "trial_index", "word", "color",
+        expected = {"participant_id", "block_index", "trial_index", "word", "color",
                     "stimulus_location", "correct_response", "correct"}
         assert expected.issubset(set(input_df.columns))
 
@@ -137,7 +137,7 @@ class TestStroopSimonStatistics:
 
 @pytest.fixture(scope="module")
 def rdk_dfs():
-    return _load_small("rdk_task_switching", "config/rdk_task_switching_benchmark.yaml")
+    return _load_small("rdk_task_switching", "config/synthetic_rdk_task_switching_benchmark.yaml")
 
 
 class TestRDKStructure:
@@ -151,7 +151,7 @@ class TestRDKStructure:
 
     def test_observable_columns(self, rdk_dfs):
         _, input_df = rdk_dfs
-        expected = {"participant_id", "trial_index", "task", "motion",
+        expected = {"participant_id", "block_index", "trial_index", "task", "motion",
                     "color", "orientation", "motion_coherence", "color_coherence",
                     "orientation_coherence", "correct_response", "correct"}
         assert expected.issubset(set(input_df.columns))
@@ -194,6 +194,19 @@ class TestRDKStructure:
         valid_past = full_df["past_stimulus_difficulty"].dropna()
         assert valid_past.between(0.0, 1.0).all()
 
+    def test_past_stimulus_difficulty_is_block_local_lag(self, rdk_dfs):
+        full_df, _ = rdk_dfs
+        expected = full_df.groupby(
+            ["participant_id", "block_index"],
+            sort=False,
+        )["current_stimulus_difficulty"].shift(1)
+
+        pd.testing.assert_series_equal(
+            full_df["past_stimulus_difficulty"].reset_index(drop=True),
+            expected.reset_index(drop=True),
+            check_names=False,
+        )
+
     def test_n2_task_inhibition_levels(self, rdk_dfs):
         full_df, _ = rdk_dfs
         valid = full_df["n2_task_inhibition"].dropna()
@@ -233,7 +246,7 @@ class TestRDKStatistics:
 @pytest.fixture(scope="module")
 def prospect_dfs():
     # Use more trials for stability; for prospect theory n_blocks = n_trials
-    return _load_small("prospect_theory", "config/prospect_theory_benchmark.yaml",
+    return _load_small("prospect_theory", "config/synthetic_prospect_theory_benchmark.yaml",
                        n_participants=N_PARTICIPANTS, n_blocks=50)
 
 

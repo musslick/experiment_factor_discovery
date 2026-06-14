@@ -72,4 +72,4 @@ matching rather than name matching.
 
 ## Config file
 
-`config/stroop_simon_benchmark.yaml`
+`config/synthetic_stroop_simon_benchmark.yaml`

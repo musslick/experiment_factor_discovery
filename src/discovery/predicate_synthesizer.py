@@ -94,6 +94,7 @@ def synthesize_predicate(
     temperature: float = 0.2,
     timeout_seconds: int = 10,
     backend: str = "subprocess",
+    docker_image: str = "python:3.9-slim",
     max_tokens: int = 1200,
     observable_factor_descriptions: str = "",
 ) -> Optional[str]:
@@ -190,6 +191,7 @@ def synthesize_predicate(
             timeout_seconds=timeout_seconds,
             backend=backend,
             depends_on=candidate.depends_on,
+            docker_image=docker_image,
         )
         if not sandbox.success:
             previous_error = (

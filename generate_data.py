@@ -2,7 +2,7 @@
 Standalone data-generation script.
 
 Usage:
-    python generate_data.py --config config/stroop_benchmark.yaml
+    python generate_data.py --config config/synthetic_stroop_benchmark.yaml
     python generate_data.py --config config/run.yaml   # generates all listed benchmarks
 """
 

@@ -124,6 +124,8 @@ class DiscoveryConfig:
     min_validation_improvement: float = 0.001
     decomposition_check_enabled: bool = True
     decomposition_check_max_arity: int = 2
+    run_contrast_search: bool = True
+    max_contrasts_per_candidate: int = 8
     run_effect_search: bool = True
     max_interaction_order: int = 2
     max_interactions_per_round: int = 1
@@ -425,6 +427,8 @@ def _parse_benchmark_dict(raw: dict) -> BenchmarkConfig:
         min_validation_improvement=disc.get("min_validation_improvement", 0.001),
         decomposition_check_enabled=disc.get("decomposition_check_enabled", True),
         decomposition_check_max_arity=disc.get("decomposition_check_max_arity", 2),
+        run_contrast_search=disc.get("run_contrast_search", True),
+        max_contrasts_per_candidate=int(disc.get("max_contrasts_per_candidate", 8)),
         run_effect_search=disc.get("run_effect_search", True),
         max_interaction_order=disc.get("max_interaction_order", 2),
         max_interactions_per_round=disc.get("max_interactions_per_round", 1),

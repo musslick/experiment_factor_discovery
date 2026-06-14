@@ -24,28 +24,30 @@ def build_seeding_strategy(config, llm) -> SeedingStrategy:
     disc_cfg = config.discovery
     llm_cfg  = config.llm
     cfg      = disc_cfg.seeding_strategy
+    strategy_seed = getattr(config, "seed", None)
 
     if cfg.type == "llm":
         return LLMSeeder(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg)
 
     if cfg.type == "random":
-        return RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg)
+        return RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg, seed=strategy_seed)
 
     if cfg.type == "random_lookup":
-        return RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg)
+        return RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg, seed=strategy_seed)
 
     if cfg.type == "mixed":
         components: List[Tuple[SeedingStrategy, int]] = []
-        for comp in cfg.components:
+        for idx, comp in enumerate(cfg.components):
             n = comp.get("n_candidates", cfg.n_candidates)
+            component_seed = None if strategy_seed is None else strategy_seed + idx
             sub_type = comp.get("type", "llm")
             sub_cfg = _make_sub_seeder_cfg(comp)
             if sub_type == "llm":
                 components.append((LLMSeeder(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg), n))
             elif sub_type == "random":
-                components.append((RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg), n))
+                components.append((RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg, seed=component_seed), n))
             elif sub_type == "random_lookup":
-                components.append((RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg), n))
+                components.append((RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg, seed=component_seed), n))
             else:
                 raise ValueError(f"Unknown mixed seeder component type: {sub_type}")
         return MixedSeeder(components=components)

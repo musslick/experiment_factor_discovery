@@ -19,7 +19,11 @@ import pandas as pd
 import pytest
 
 from src.analysis.evaluation import compute_nmi
-from src.discovery.within_round_search import _compute_adjusted_score, _compute_novelty_score
+from src.discovery.within_round_search import (
+    _check_decomposition,
+    _compute_adjusted_score,
+    _compute_novelty_score,
+)
 from src.discovery.factor_registry import CandidateFactor
 
 
@@ -193,3 +197,61 @@ class TestComputeAdjustedScoreNovelty:
             novelty_score=1.0, novelty_weight=0.04,
         )
         assert full - half == pytest.approx(0.02)
+
+
+# ---------------------------------------------------------------------------
+# Test complexity/decomposition guards
+# ---------------------------------------------------------------------------
+
+
+def test_complexity_and_dependency_penalties_prefer_simpler_candidates():
+    simple = CandidateFactor(
+        name="simple",
+        description="",
+        factor_type="within_trial",
+        factor_class="discrete",
+        levels=["a", "b"],
+        depends_on=["color"],
+    )
+    compressed = CandidateFactor(
+        name="compressed",
+        description="",
+        factor_type="within_trial",
+        factor_class="discrete",
+        levels=["a", "b", "c"],
+        depends_on=["color", "word", "task"],
+    )
+
+    simple_score = _compute_adjusted_score(
+        0.11, 0.01, simple,
+        stability_weight=1.0,
+        complexity_exponent=1.0,
+        depends_on_exponent=0.5,
+    )
+    compressed_score = _compute_adjusted_score(
+        0.11, 0.01, compressed,
+        stability_weight=1.0,
+        complexity_exponent=1.0,
+        depends_on_exponent=0.5,
+    )
+
+    assert simple_score == pytest.approx(0.10)
+    assert compressed_score == pytest.approx(0.10 / (2 * np.sqrt(3)))
+    assert simple_score > compressed_score
+
+
+def test_decomposition_check_detects_exact_interaction_relabeling():
+    df = pd.DataFrame({
+        "congruency": ["con", "con", "inc", "inc"],
+        "previous_congruency": ["con", "inc", "con", "inc"],
+    })
+    candidate = pd.Series(["cc", "ci", "ic", "ii"])
+
+    result, factors = _check_decomposition(
+        candidate,
+        df,
+        ["congruency", "previous_congruency"],
+    )
+
+    assert result == "bijection"
+    assert factors == ["congruency", "previous_congruency"]
