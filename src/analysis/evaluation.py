@@ -4,8 +4,8 @@ factors using a bijection-based comparison that is robust to level-name
 differences.
 
 A discovered factor D matches ground-truth factor G if there exists a
-bijection φ between their level sets such that for ≥ threshold of the
-applicable (non-NaN) trials, φ(D(t)) = G(t).
+bijection phi between their level sets such that for >= threshold of the
+applicable (non-NaN) trials, phi(D(t)) = G(t).
 
 The Hungarian algorithm (scipy.optimize.linear_sum_assignment) finds the
 maximum-weight bijection when multiple discovered and GT factors must be
@@ -13,7 +13,7 @@ matched simultaneously.
 """
 
 from dataclasses import dataclass
-from itertools import permutations
+from itertools import combinations, permutations
 from typing import List, Optional
 
 import numpy as np
@@ -33,8 +33,38 @@ from src.utils.config import GroundTruthFactor
 class MatchedPair:
     ground_truth_name: str
     discovered_name: str
-    agreement_rate: float        # bijection agreement for discrete; |Spearman ρ| for continuous
+    agreement_rate: float        # bijection agreement for discrete; |Spearman rho| for continuous
     correlation: Optional[float] = None   # set for continuous matches, None for discrete
+
+
+@dataclass
+class LevelRecoveryMatch:
+    ground_truth_name: str
+    ground_truth_level: str
+    discovered_name: str
+    discovered_subset: List[str]
+    precision: float
+    recall: float
+    f1: float
+    jaccard: float
+    support: int
+
+
+@dataclass
+class GroundTruthLevelRecovery:
+    ground_truth_name: str
+    ground_truth_level: str
+    recovered: bool
+    best_match: Optional[LevelRecoveryMatch]
+
+
+@dataclass
+class LevelRecoveryReport:
+    level_results: List[GroundTruthLevelRecovery]
+    recovered_count: int
+    total_count: int
+    recall: float
+    threshold: float
 
 
 @dataclass
@@ -47,6 +77,7 @@ class EvaluationReport:
     f1: float
     n_ground_truth: int
     n_discovered: int
+    level_recovery: Optional[LevelRecoveryReport] = None
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +153,136 @@ def compute_nmi(series_a: pd.Series, series_b: pd.Series) -> float:
     ))
 
 
+def _ordered_levels(series: pd.Series, declared_levels: List[str]) -> List:
+    observed = list(pd.Series(series).dropna().unique())
+    levels = [lv for lv in declared_levels if lv in observed]
+    levels.extend(lv for lv in observed if lv not in levels)
+    return levels
+
+
+def _level_subsets(levels: List, max_exhaustive_levels: int) -> List[tuple]:
+    """Return non-empty, non-complete subsets to test as positive predictions."""
+    levels = list(levels)
+    n_levels = len(levels)
+    if n_levels < 2:
+        return []
+
+    if n_levels <= max_exhaustive_levels:
+        subsets = []
+        for size in range(1, n_levels):
+            subsets.extend(combinations(levels, size))
+        return subsets
+
+    singleton = [(lv,) for lv in levels]
+    complements = [tuple(other for other in levels if other != lv) for lv in levels]
+    return singleton + complements
+
+
+def _score_level_subset(
+    gt_series: pd.Series,
+    gt_level,
+    disc_series: pd.Series,
+    disc_subset: tuple,
+) -> Optional[tuple]:
+    combined = pd.DataFrame({"gt": gt_series, "disc": disc_series}).dropna()
+    if combined.empty:
+        return None
+
+    target = combined["gt"] == gt_level
+    predicted = combined["disc"].isin(set(disc_subset))
+
+    support = int(target.sum())
+    if support == 0:
+        return None
+
+    tp = int((target & predicted).sum())
+    fp = int((~target & predicted).sum())
+    fn = int((target & ~predicted).sum())
+
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if (precision + recall) else 0.0
+    )
+    jaccard = tp / (tp + fp + fn) if (tp + fp + fn) else 0.0
+    return precision, recall, f1, jaccard, support
+
+
+def compute_level_recovery(
+    ground_truth_factors: List[GroundTruthFactor],
+    discovered_factors: List[DiscoveredFactor],
+    full_df: pd.DataFrame,
+    threshold: float = 0.95,
+    max_exhaustive_levels: int = 8,
+) -> LevelRecoveryReport:
+    """
+    Evaluate recovery of individual levels from discrete ground-truth factors.
+
+    This is intentionally separate from full-factor bijection matching. A level
+    is recovered when some subset of levels from an accepted discrete discovered
+    factor isolates that ground-truth level with F1 >= threshold.
+    """
+    results: List[GroundTruthLevelRecovery] = []
+
+    discrete_discovered = [
+        disc for disc in discovered_factors
+        if disc.candidate.factor_class == "discrete"
+    ]
+
+    for gt in ground_truth_factors:
+        if getattr(gt, "factor_class", "discrete") != "discrete":
+            continue
+        if gt.name not in full_df.columns:
+            continue
+
+        gt_series = full_df[gt.name]
+        gt_levels = _ordered_levels(gt_series, list(gt.levels))
+
+        for gt_level in gt_levels:
+            best_match: Optional[LevelRecoveryMatch] = None
+            for disc in discrete_discovered:
+                disc_series = disc.column_values
+                disc_levels = _ordered_levels(disc_series, list(disc.candidate.levels))
+                for subset in _level_subsets(disc_levels, max_exhaustive_levels):
+                    scores = _score_level_subset(gt_series, gt_level, disc_series, subset)
+                    if scores is None:
+                        continue
+                    precision, recall, f1, jaccard, support = scores
+                    if best_match is not None and f1 <= best_match.f1:
+                        continue
+                    best_match = LevelRecoveryMatch(
+                        ground_truth_name=gt.name,
+                        ground_truth_level=str(gt_level),
+                        discovered_name=disc.column_name,
+                        discovered_subset=[str(lv) for lv in subset],
+                        precision=float(precision),
+                        recall=float(recall),
+                        f1=float(f1),
+                        jaccard=float(jaccard),
+                        support=support,
+                    )
+
+            recovered = best_match is not None and best_match.f1 >= threshold
+            results.append(GroundTruthLevelRecovery(
+                ground_truth_name=gt.name,
+                ground_truth_level=str(gt_level),
+                recovered=recovered,
+                best_match=best_match,
+            ))
+
+    recovered_count = sum(1 for r in results if r.recovered)
+    total_count = len(results)
+    recall = recovered_count / total_count if total_count else 1.0
+    return LevelRecoveryReport(
+        level_results=results,
+        recovered_count=recovered_count,
+        total_count=total_count,
+        recall=float(recall),
+        threshold=threshold,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
@@ -147,7 +308,7 @@ def match_factors_bijection(
     discovered_factors       : Factors accepted by the discovery pipeline.
     full_df                  : Complete dataset including ground-truth factor columns.
     threshold                : Minimum agreement rate for discrete matches (default 0.95).
-    continuous_threshold     : Minimum |ρ| for continuous matches (default 0.7).
+    continuous_threshold     : Minimum |rho| for continuous matches (default 0.7).
 
     Returns
     -------
@@ -155,15 +316,22 @@ def match_factors_bijection(
     """
     n_gt   = len(ground_truth_factors)
     n_disc = len(discovered_factors)
+    level_recovery = compute_level_recovery(
+        ground_truth_factors=ground_truth_factors,
+        discovered_factors=discovered_factors,
+        full_df=full_df,
+        threshold=threshold,
+    )
 
     if n_gt == 0 and n_disc == 0:
-        return EvaluationReport([], [], [], 1.0, 1.0, 1.0, 0, 0)
+        return EvaluationReport([], [], [], 1.0, 1.0, 1.0, 0, 0, level_recovery)
     if n_gt == 0:
         return EvaluationReport(
             matched_pairs=[], unmatched_ground_truth=[],
             unmatched_discovered=[f.column_name for f in discovered_factors],
             precision=0.0, recall=1.0, f1=0.0,
             n_ground_truth=0, n_discovered=n_disc,
+            level_recovery=level_recovery,
         )
     if n_disc == 0:
         return EvaluationReport(
@@ -172,9 +340,10 @@ def match_factors_bijection(
             unmatched_discovered=[],
             precision=1.0, recall=0.0, f1=0.0,
             n_ground_truth=n_gt, n_discovered=0,
+            level_recovery=level_recovery,
         )
 
-    # Build agreement matrix (n_gt × n_disc)
+    # Build agreement matrix (n_gt x n_disc)
     agreement = np.zeros((n_gt, n_disc))
     for i, gt in enumerate(ground_truth_factors):
         gt_series = full_df[gt.name]
@@ -227,4 +396,5 @@ def match_factors_bijection(
         f1=f1,
         n_ground_truth=n_gt,
         n_discovered=n_disc,
+        level_recovery=level_recovery,
     )
