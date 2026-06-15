@@ -267,6 +267,28 @@ class TestWindowWidth3:
 
 
 # ---------------------------------------------------------------------------
+# TestBlockBoundaries
+# ---------------------------------------------------------------------------
+
+class TestBlockBoundaries:
+
+    def test_window_resets_at_block_starts_when_depends_on_filters_columns(self):
+        df = pd.DataFrame([
+            {"participant_id": 0, "block_index": 0, "trial_index": 0, "task": "A"},
+            {"participant_id": 0, "block_index": 0, "trial_index": 1, "task": "B"},
+            {"participant_id": 0, "block_index": 1, "trial_index": 0, "task": "C"},
+            {"participant_id": 0, "block_index": 1, "trial_index": 1, "task": "C"},
+        ])
+
+        result = run_predicate(
+            TASK_TRANS_CODE, df, "window", window_width=2, depends_on=["task"]
+        )
+
+        assert result.success
+        assert result.values == [None, "switch", None, "repeat"]
+
+
+# ---------------------------------------------------------------------------
 # TestErrorHandling
 # ---------------------------------------------------------------------------
 

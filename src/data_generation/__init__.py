@@ -42,7 +42,7 @@ class RDKDataGenerator(BenchmarkDataGenerator):
     @property
     def observable_columns(self) -> List[str]:
         return [
-            "participant_id", "trial_index",
+            "participant_id", "block_index", "trial_index",
             "task", "motion", "color", "orientation",
             "motion_coherence", "color_coherence", "orientation_coherence",
             "correct_response",
