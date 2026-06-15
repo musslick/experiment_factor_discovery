@@ -1,8 +1,8 @@
 """Figure 4 — Novel Factor Discovery on Empirical Datasets.
 
 Vertical layout per discovery cell:
-  Top (~58%):  effect plot — participant dots + group mean ± 95% CI
-  Bottom (~42%): code inset — compute_factor() block + SweetPea block
+  Top (~62%):  effect plot — participant dots + group mean ± 95% CI
+  Bottom (~38%): code inset — compute_factor() block only
 """
 
 import os
@@ -27,12 +27,9 @@ fig = plt.figure(figsize=(style.W2, 5.5 * N_ROWS))
 outer_gs = gridspec.GridSpec(N_ROWS, N_COLS, figure=fig,
                              hspace=0.55, wspace=0.38)
 
-# ── Color scheme for the two code sections ────────────────────────────────────
-CODE_BG  = '#F5F5F5'    # light gray — compute_factor block
-CODE_EGE = '#DDDDDD'
-SP_BG    = '#EEF4EE'    # pale green — SweetPea block
-SP_EDG   = '#BBDABB'
-SP_FG    = '#2B7D2B'    # dark green text
+# ── Code block colors ─────────────────────────────────────────────────────────
+CODE_BG  = '#F5F5F5'
+CODE_EDG = '#DDDDDD'
 
 
 def plot_discovery(outer_cell, disc):
@@ -40,7 +37,7 @@ def plot_discovery(outer_cell, disc):
 
     inner = gridspec.GridSpecFromSubplotSpec(
         2, 1, subplot_spec=outer_cell,
-        height_ratios=[3.2, 2.2], hspace=0.28)
+        height_ratios=[3.5, 1.8], hspace=0.28)
 
     ax_eff  = fig.add_subplot(inner[0])
     ax_code = fig.add_subplot(inner[1])
@@ -99,40 +96,23 @@ def plot_discovery(outer_cell, disc):
     ax_code.set_ylim(0, 1)
     ax_code.axis('off')
 
-    sweetpea   = disc.get('sweetpea')
-    code_text  = disc['code']
-    has_sp     = bool(sweetpea)
-    code_top   = 1.0
-    code_bot   = 0.38 if has_sp else 0.0   # compute_factor block bottom
-    sp_top     = code_bot
-    sp_bot     = 0.0
+    # Gray background spanning full inset height
+    ax_code.add_patch(Rectangle((0, 0), 1, 1,
+                                facecolor=CODE_BG, edgecolor=CODE_EDG,
+                                lw=0.5, transform=ax_code.transAxes,
+                                clip_on=False))
 
-    def add_block(ax, x0, y0, w, h, facecolor, edgecolor):
-        ax.add_patch(Rectangle((x0, y0), w, h,
-                               facecolor=facecolor, edgecolor=edgecolor,
-                               lw=0.5, transform=ax.transAxes, clip_on=False))
-
-    # compute_factor block
-    add_block(ax_code, 0, code_bot, 1, code_top - code_bot, CODE_BG, CODE_EGE)
-    ax_code.text(0.025, 0.97, 'compute_factor()',
+    # Header label
+    ax_code.text(0.04, 0.94, 'compute_factor()',
                  transform=ax_code.transAxes, ha='left', va='top',
                  fontsize=style.FS_CODE, color='#999999',
-                 fontfamily='monospace')
-    ax_code.text(0.025, 0.83, code_text,
+                 fontfamily='monospace', clip_on=True)
+
+    # Code body — clip_on=True prevents text from running past the box edge
+    ax_code.text(0.04, 0.78, disc['code'],
                  transform=ax_code.transAxes, ha='left', va='top',
                  fontsize=style.FS_CODE, fontfamily='monospace',
-                 color='#1A1A1A', linespacing=1.65)
-
-    # SweetPea block
-    if has_sp:
-        add_block(ax_code, 0, sp_bot, 1, sp_top - sp_bot, SP_BG, SP_EDG)
-        ax_code.text(0.025, sp_top - 0.02, 'SweetPea',
-                     transform=ax_code.transAxes, ha='left', va='top',
-                     fontsize=style.FS_CODE, color=SP_FG, fontweight='bold')
-        ax_code.text(0.025, sp_top - 0.15, sweetpea,
-                     transform=ax_code.transAxes, ha='left', va='top',
-                     fontsize=style.FS_CODE - 0.3, fontfamily='monospace',
-                     color=SP_FG)
+                 color='#1A1A1A', linespacing=1.65, clip_on=True)
 
     # ΔLL + reference below the code inset
     dl = disc['delta_ll']
