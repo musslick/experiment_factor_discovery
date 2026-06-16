@@ -109,8 +109,12 @@ def _add_continuous_hidden_factors(df: pd.DataFrame) -> pd.DataFrame:
 
     df["current_stimulus_difficulty"] = df.apply(_relevant_coherence, axis=1).rsub(1)
 
+    group_cols = ["participant_id"]
+    if "block_index" in df.columns:
+        group_cols.append("block_index")
+
     past_vals = []
-    for pid, grp in df.groupby("participant_id", sort=False):
+    for _, grp in df.groupby(group_cols, sort=False):
         past_vals.append(grp["current_stimulus_difficulty"].shift(1))
     df["past_stimulus_difficulty"] = pd.concat(past_vals).reindex(df.index)
 
@@ -155,6 +159,7 @@ def build_rdk_dataset(
                 n2_raw = exp["n2_task_inhibition"][t_idx]
                 rows.append({
                     "participant_id":        p_idx,
+                    "block_index":          b_idx,
                     "trial_index":           trial_counter,
                     "task":                  exp["task"][t_idx],
                     "motion":                exp["motion"][t_idx],

@@ -19,7 +19,11 @@ import pandas as pd
 import pytest
 
 from src.analysis.evaluation import compute_nmi
-from src.discovery.within_round_search import _compute_adjusted_score, _compute_novelty_score
+from src.discovery.within_round_search import (
+    _build_obs_desc_str,
+    _compute_adjusted_score,
+    _compute_novelty_score,
+)
 from src.discovery.factor_registry import CandidateFactor
 
 
@@ -36,6 +40,23 @@ def _make_candidate(n_levels: int = 2, factor_class: str = "discrete") -> Candid
         levels=[str(i) for i in range(n_levels)],
         depends_on=[],
     )
+
+
+# ---------------------------------------------------------------------------
+# TestObservableDescription
+# ---------------------------------------------------------------------------
+
+class TestObservableDescription:
+    def test_execution_metadata_is_not_prompted_as_observable_factor(self):
+        desc = _build_obs_desc_str(
+            ["participant_id", "block_index", "trial_index", "task"],
+            {"task": "motion | color | orientation"},
+        )
+
+        assert "task: motion | color | orientation" in desc
+        assert "participant_id" not in desc
+        assert "block_index" not in desc
+        assert "trial_index" not in desc
 
 
 # ---------------------------------------------------------------------------
