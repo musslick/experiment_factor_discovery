@@ -307,7 +307,7 @@ def _build_obs_desc_str(
 ) -> str:
     lines = []
     for name in observable_cols:
-        if name in ("participant_id", "trial_index"):
+        if name in ("participant_id", "block_index", "trial_index"):
             continue
         desc = (descriptions or {}).get(name, "")
         lines.append(f"  {name}{': ' + desc if desc else ''}")

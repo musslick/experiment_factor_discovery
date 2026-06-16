@@ -71,13 +71,13 @@ window_width = data.get('window_width', 2)
 n            = data['n']
 
 results = [None] * n
-by_pid  = collections.defaultdict(list)
+by_group = collections.defaultdict(list)
 for row in rows:
-    by_pid[row['participant_id']].append(row)
+    by_group[(row['participant_id'], row.get('block_index', -1))].append(row)
 
 try:
-    for pid in sorted(by_pid.keys()):
-        p_rows = sorted(by_pid[pid], key=lambda r: r['trial_index'])
+    for group_key in sorted(by_group.keys()):
+        p_rows = sorted(by_group[group_key], key=lambda r: r['trial_index'])
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
@@ -110,13 +110,13 @@ window_width = data.get('window_width', 2)
 n            = data['n']
 
 results = [None] * n
-by_pid  = collections.defaultdict(list)
+by_group = collections.defaultdict(list)
 for row in rows:
-    by_pid[row['participant_id']].append(row)
+    by_group[(row['participant_id'], row.get('block_index', -1))].append(row)
 
 try:
-    for pid in sorted(by_pid.keys()):
-        p_rows = sorted(by_pid[pid], key=lambda r: r['trial_index'])
+    for group_key in sorted(by_group.keys()):
+        p_rows = sorted(by_group[group_key], key=lambda r: r['trial_index'])
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
@@ -159,6 +159,8 @@ def _serialize_df(
     """
     if keep_cols is not None:
         required = {"participant_id", "trial_index"}
+        if "block_index" in df.columns:
+            required.add("block_index")
         cols = [c for c in keep_cols if c in df.columns]
         cols = list(dict.fromkeys([c for c in required if c in df.columns] + cols))
         df = df[cols]
