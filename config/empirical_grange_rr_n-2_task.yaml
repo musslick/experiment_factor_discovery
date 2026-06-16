@@ -4,19 +4,19 @@ benchmark:
 
 dataset:
   path: "data/empirical/grange_n-2_task.csv"
-  participant_id_column: "participant"
+  participant_id_column: "subjectid"
   n_participants: 79
-  outcome_variable: "rt"
-  extra_columns: ["cue_image", "order", "TrialNumber"]
-  #null_formula: "np.log(latency) ~ C(color) + C(word)"
-  #full_formula: "np.log(latency) ~ C(color) + C(word) + C(congruency)"
+  outcome_variable: "latency"
+  extra_columns: ["cue_image", "order", "trial"]
+  null_formula: "np.log(latency) ~ C(stimulus) + C(task)"
+  full_formula: "np.log(latency) ~ C(stimulus) + C(task) + C(csequence) + C(Response_Repitition) + C(task_transition)"
   task_context: |
     Participants are tasked to make a mental transformation of a stimulus object (hexagon, triangle or square) 
     in a cued direction (horizontal, vertical, diagonal). To indicate the transformed position, participants 
     are tasked to press 1,2,4 or 5 on the num-pad. 
   base_factors:
     - {name: stimulus, dtype: categorical, levels: [topLeft, topRight, bottomLeft, bottomRight]}
-    - {name: cue,  dtype: categorical, levels: [horizontal, vertical, diagonal]}
+    - {name: task,  dtype: categorical, levels: [horizontal, vertical, diagonal]}
   hidden_factors:
     - name: "sequence"
       type: "window"
@@ -25,6 +25,10 @@ dataset:
       type: "window"
       levels: ["switch", "repitiion"]
       column: "respRep"
+    - name: "task_transition"
+      type: "window"
+      levels: ["switch", "repeat"]
+
 
 discovery:
   allowed_factor_classes: ["discrete"]
@@ -37,9 +41,9 @@ statistical:
   # For accuracy: the LHS is replaced with the bare column name (no transform), and the
   #   logistic model family is selected by type: "binary".
   outcome_variables:
-    - name: rt    # primary — must appear in null_formula LHS ("np.log(latency)")
+    - name: latency   # primary — must appear in null_formula LHS ("np.log(latency)")
       type: continuous
-    - name: acc   # secondary — must be a 0/1 column in the CSV
+    - name: accuracy   # secondary — must be a 0/1 column in the CSV
       type: binary
 
 # No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.

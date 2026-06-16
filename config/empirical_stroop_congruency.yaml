@@ -7,9 +7,9 @@ dataset:
   participant_id_column: "subjectid"
   n_participants: 466
   outcome_variable: "latency"
-  extra_columns: ["trialnum", "blocknum", "blockcode"]
+  extra_columns: ["trial", "blocknum", "blockcode"]
   null_formula: "np.log(latency) ~ C(color) + C(word)"
-  full_formula: "np.log(latency) ~ C(color) + C(word) + C(congruency)"
+  full_formula: "np.log(latency) ~ C(color) + C(word) + C(congruency) + C(response_repetition)"
   task_context: |
     This is a Stroop task. On each trial a participant sees a colour word (e.g. "red",
     "blue", "green", "black") printed in coloured ink and must indicate the colour of
@@ -22,6 +22,9 @@ dataset:
       type: "within_trial"
       levels: ["congruent", "incongruent"]
       # column: "congruency"   # omitted: defaults to name
+    - name: "response_repetition"
+      type: "transition"
+      levels: ["switch", "repeat"]
 
 discovery:
   allowed_factor_classes: ["discrete"]

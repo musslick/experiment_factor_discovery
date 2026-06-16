@@ -4,8 +4,8 @@ benchmark:
 
 dataset:
   path: "data/empirical/digit_task_controlgroup.csv"
-  participant_id_column: "subject"   # column name for participant ID in the CSV
-  outcome_variable: "rt"          # binary 0/1 column
+  participant_id_column: "subjectid"   # column name for participant ID in the CSV
+  outcome_variable: "latency"          # binary 0/1 column
   task_context: |
     The digits 1–9 (except 5) serve as stimuli, and are presented in white 
     on black background, centrally on the screen. Participants switched between 
@@ -30,9 +30,21 @@ dataset:
       type: "window"      # "within_trial" or "window"
       levels: ["ABA", "CBA"]
   extra_columns: ["trialnr"]   # columns to keep in the dataframe but not model
-  #null_formula: "rt ~ C(task)"   # auto-built if omitted
-  #full_formula: "rt ~ C(task) + C(tasksequence)"  # auto-built if omitted; should include all base and hidden factors
+  null_formula: "np.log(latency) ~ C(task)"   # auto-built if omitted
+  full_formula: "np.log(latency) ~ C(task) + C(tasksequence)"  # auto-built if omitted; should include all base and hidden factors
 
 discovery:
   sandbox_timeout_seconds: 30   # increase for large datasets (>50k rows)
   allowed_factor_classes: ["discrete"]
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: latency   # primary — must appear in null_formula LHS ("np.log(latency)")
+      type: continuous
+    - name: accuracy   # secondary — must be a 0/1 column in the CSV
+      type: binary

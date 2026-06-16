@@ -1,0 +1,48 @@
+benchmark:
+  name: "flanker_congruency_empirical"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/flanker_data.csv"
+  participant_id_column: "subjectid"
+  n_participants: 789
+  outcome_variable: "latency"
+  extra_columns: ["trialnum", "blocknum", "blockcode"]
+  null_formula: "np.log(latency) ~ C(target) + C(distractor_direction)"
+  full_formula: "np.log(latency) ~ C(target) + C(distractor_direction) + C(congruency) + C(response_repetition) + C(stimulus_repetition)"
+  task_context: |
+    This is a Flanker task. On each trial a participant sees a row of arrows 
+    (e.g. "<<<", ">>>") and must indicate the direction of the central arrow 
+    by pressing a key. The surrounding arrows can point in the same or opposite 
+    directions Response latency (RT) and accuracy are the outcomes to predict.
+  base_factors:
+    - {name: target, dtype: categorical, levels: [left, right]}
+    - {name: distractor_direction, dtype: categorical, levels: [left, right]}
+  hidden_factors:
+    - name: "congruency"
+      type: "within_trial"
+      levels: ["congruent", "incongruent"]
+      # column: "congruency"   # omitted: defaults to name
+    - name: "response_repetition"
+      type: "within_trial"
+      levels: ["switch", "repetition"]
+    - name: "stimulus_repetition"
+      type: "within_trial"
+      levels: ["switch", "repetition"]
+discovery:
+  allowed_factor_classes: ["discrete"]
+  sandbox_timeout_seconds: 30
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: latency    # primary — must appear in null_formula LHS ("np.log(latency)")
+      type: continuous
+    - name: accuracy   # secondary — must be a 0/1 column in the CSV
+      type: binary
+
+# No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.
