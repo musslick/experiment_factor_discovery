@@ -38,7 +38,7 @@ evaluation:
       factor_class: "discrete"
       levels: ["congruent", "incongruent"]
     - name: "location_response_congruency"
-      type: "within_trial"
+      type: "transition"
       factor_class: "discrete"
       levels: ["congruent", "incongruent"]
     - name: "congruency_previous_trial"

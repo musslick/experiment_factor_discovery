@@ -1,0 +1,52 @@
+benchmark:
+  name: "Hirsch_et_al_dual_task_empirical"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/dual_task_hirsch_et_al.csv"
+  participant_id_column: "subjectid"
+  n_participants: 79
+  outcome_variable: "latency2"
+  extra_columns: ["block", "trial"]
+  null_formula: "np.log(latency2) ~ C(T1) + C(T2) + C(SOA)"
+  full_formula: "np.log(latency2) ~ C(T1) + C(T2) + C(SOA) + C(RT1_SOAdif) + C(T1T2sequence)" #response_repitition not reconstructable from data
+  task_context: |
+    Participants performed two rapid categorization tasks in sequence (dual-task paradigm). 
+    Task 1 (T1) and Task 2 (T2) each involved either a parity judgment (odd vs. even) on 
+    digits 1–9 (excluding 5) or a letter categorization (consonant vs. vowel) on the letters 
+    A, E, G, I, K, M, R, and U. T1 stimuli appeared to the left of a central fixation cross 
+    and T2 stimuli to the right. Responses were given via two two-key sets: the left set 
+    (y/x keys) for T1 and the right set (n/m keys) for T2. The stimulus-response mapping was 
+    spatially consistent across key sets and counterbalanced across participants. Stimulus onset 
+    asynchrony (SOA) between T1 and T2 varied (50, 450, 1000, or 2000 ms).
+  base_factors:
+    - {name: T1, dtype: categorical, levels: [1, 2]}
+    - {name: T2, dtype: categorical, levels: [1, 2]}
+    - {name: SOA,  dtype: categorical, levels: [50, 450, 1000, 2000]}
+  hidden_factors:
+    - name: "RT1_SOAdif"
+      type: "within_trial"
+      factor_class: "continuous"
+    - name: "T1T2sequence"
+      type: "within_trial"
+      levels: ["1", "2"]
+
+
+
+discovery:
+  allowed_factor_classes: ["discrete", "continuous"]
+  sandbox_timeout_seconds: 30
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: latency2   # primary — must appear in null_formula LHS ("np.log(latency)")
+      type: continuous
+    - name: accuracy2   # secondary — must be a 0/1 column in the CSV
+      type: binary
+
+# No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.

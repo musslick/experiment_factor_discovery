@@ -119,7 +119,13 @@ discovery:
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm:
-  model: "claude-sonnet-4-6"      # Anthropic model ID used for all LLM calls
+  # Anthropic (default) — requires ANTHROPIC_API_KEY in .env
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  # Ollama (local) — requires `ollama serve` and `pip install ollama`
+  # provider: "ollama"
+  # model: "llama3.2"
+  # ollama_base_url: "http://localhost:11434"
   max_tokens_candidate: 2000      # token budget for candidate generation / evolution responses
   max_tokens_predicate: 1000      # token budget for predicate synthesis responses
   candidate_temperature: 0.9      # sampling temperature for candidate generation (higher = more diverse)

@@ -37,7 +37,7 @@ from src.analysis.model_comparison import compute_final_model_statistics
 from src.analysis.plotting import plot_all_effects
 from src.data_generation import load_empirical_data
 from src.discovery.factor_registry import DiscoveredEffect, DiscoveredFactor, FactorRegistry
-from src.discovery.llm_client import LLMClient
+from src.discovery.llm_client import LLMClient, make_llm_client
 from src.discovery.pipeline import run_discovery_pipeline
 from src.utils.config import BaseFactor, BenchmarkConfig, load_config
 
@@ -273,7 +273,7 @@ def run_single_discovery(
     # Step 2: Discovery pipeline
     # ------------------------------------------------------------------
     print("\nRunning discovery pipeline …")
-    llm = LLMClient(model=aug_cfg.llm.model)
+    llm = make_llm_client(aug_cfg.llm)
 
     baseline_formula = _build_discovery_baseline_formula(aug_cfg)
     print(f"  Baseline formula: {baseline_formula}")

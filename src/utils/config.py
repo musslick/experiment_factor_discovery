@@ -150,6 +150,8 @@ class LLMConfig:
     max_tokens_predicate: int
     candidate_temperature: float
     predicate_temperature: float
+    provider: str = "anthropic"             # "anthropic" or "ollama"
+    ollama_base_url: str = "http://localhost:11434"
 
 
 @dataclass
@@ -450,6 +452,8 @@ def _parse_benchmark_dict(raw: dict) -> BenchmarkConfig:
         max_tokens_predicate=llm_raw.get("max_tokens_predicate", 1000),
         candidate_temperature=llm_raw.get("candidate_temperature", 0.9),
         predicate_temperature=llm_raw.get("predicate_temperature", 0.2),
+        provider=llm_raw.get("provider", "anthropic"),
+        ollama_base_url=llm_raw.get("ollama_base_url", "http://localhost:11434"),
     )
 
     outcome_variables = [

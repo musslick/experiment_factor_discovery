@@ -10,10 +10,12 @@ benchmarks:
   # - config/synthetic_stroop_benchmark.yaml
   # - config/synthetic_stroop_simon_benchmark.yaml
   # - config/synthetic_rdk_task_switching_benchmark.yaml
-  - config/synthetic_prospect_theory_benchmark.yaml
+  # - config/synthetic_prospect_theory_benchmark.yaml
   # Empirical benchmarks (can be mixed with synthetic)
   # - config/empirical_stroop_congruency.yaml
-  # - config/empirical_stroop_categorization.yaml
+  # - config/empirical_janker_et_al.yaml
+  # - config/empirical_digit_task_switiching.yaml
+  - config/empirical_strittmatter_et_al.yaml
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 benchmark:
@@ -124,7 +126,13 @@ discovery:
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 llm:
-  model: "claude-sonnet-4-6"
+  # Anthropic (default) — requires ANTHROPIC_API_KEY in .env
+  #provider: "anthropic"
+  #model: "claude-sonnet-4-6"
+  # Ollama (local) — requires `ollama serve` and `pip install ollama`
+  provider: "ollama"
+  model: "qwen3.5:9b"
+  # ollama_base_url: "http://localhost:11434"
   max_tokens_candidate: 2000
   max_tokens_predicate: 1000
   candidate_temperature: 0.9

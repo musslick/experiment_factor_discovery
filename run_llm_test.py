@@ -18,7 +18,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from src.discovery.llm_client import LLMClient
+from src.discovery.llm_client import LLMClient, OllamaLLMClient
 from src.discovery.factor_registry import CandidateFactor
 from src.discovery.candidate_generator import generate_candidates
 from src.discovery.predicate_synthesizer import synthesize_predicate
@@ -209,11 +209,18 @@ def check_predicate_transition(llm: LLMClient, df: pd.DataFrame) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM integration smoke test")
     parser.add_argument("--model", default="claude-sonnet-4-6",
-                        help="Anthropic model ID")
+                        help="Model ID (Anthropic model ID or Ollama model name)")
+    parser.add_argument("--provider", default="anthropic", choices=["anthropic", "ollama"],
+                        help="LLM backend to use (default: anthropic)")
+    parser.add_argument("--ollama-base-url", default="http://localhost:11434",
+                        help="Ollama server URL (only used when --provider ollama)")
     args = parser.parse_args()
 
-    print(f"\nLLM smoke test — model: {args.model}")
-    llm = LLMClient(model=args.model)
+    print(f"\nLLM smoke test — provider: {args.provider}  model: {args.model}")
+    if args.provider == "ollama":
+        llm = OllamaLLMClient(model=args.model, base_url=args.ollama_base_url)
+    else:
+        llm = LLMClient(model=args.model)
     df  = _make_stroop_df()
 
     results = [
