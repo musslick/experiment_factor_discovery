@@ -34,7 +34,7 @@ data_generation:
 evaluation:
   ground_truth_factors:
     - name: "word_color_congruency"
-      type: "transition"
+      type: "within_trial"
       factor_class: "discrete"
       levels: ["congruent", "incongruent"]
     - name: "location_response_congruency"
