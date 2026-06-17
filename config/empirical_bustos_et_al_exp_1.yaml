@@ -1,0 +1,51 @@
+benchmark:
+  name: "bustos_et_al_exp1"
+  mode: "empirical_benchmark"
+
+dataset:
+  path: "data/empirical/bustos_et_al_arrow_task_exp1.csv"
+  participant_id_column: "subjectid"
+  n_participants: 71
+  outcome_variable: "latency"
+  extra_columns: ["trial"]
+  null_formula: "np.log(latency) ~ C(ref) + C(deg0) + C(deg1)"
+  full_formula: "np.log(latency) ~ C(ref) + C(deg0) + C(deg1) + C(deg_diff) + C(deg_diff_ref) + C(response_repetition)"
+  task_context: |
+    Participants are shown a reference black arrow on white background that
+    is originating from the center of the screen and pointing outward. In addition,
+    there is a blue and a green arrow originating from the same point as the 
+    black arrow but with a different degree. Participants are tasked to indicate
+    which of the two errors are closer to the reference arrow by pressing one of two keys.
+    The blue and green arrows always correspond to one of two sides (left vs. right).
+  base_factors:
+    - {name: ref, dtype: continuous}
+    - {name: deg0, dtype: continuous}
+    - {name: deg1, dtype: continuous}
+  hidden_factors:
+    - name: "deg_diff"
+      type: "within_trial"
+      factor_class: "continuous"
+    - name: "deg_diff_ref"
+      type: "within_trial"
+      factor_class: "continuous"
+    - name: "response_repetition"
+      type: "transition"
+      levels: ["switch", "repeat"]
+
+discovery:
+  allowed_factor_classes: ["discrete"]
+  sandbox_timeout_seconds: 30
+
+statistical:
+  # Multi-outcome mode: outcome_variables overrides the single outcome_type above.
+  # Primary outcome must match dataset.outcome_variable and the null_formula LHS.
+  # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
+  # For accuracy: the LHS is replaced with the bare column name (no transform), and the
+  #   logistic model family is selected by type: "binary".
+  outcome_variables:
+    - name: latency    # primary — must appear in null_formula LHS ("np.log(latency)")
+      type: continuous
+    - name: accuracy   # secondary — must be a 0/1 column in the CSV
+      type: binary
+
+# No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.
