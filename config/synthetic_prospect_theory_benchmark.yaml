@@ -7,7 +7,7 @@ data_generation:
   n_blocks_per_participant: 200  # = n_trials_per_participant (1 trial per SweetPea block)
   outcome_variable: "chose_left"
   task_context: |
-    This is a prospect-theory risky-choice task. On each trial, two monetary
+    This is a risky-choice task. On each trial, two monetary
     gambles are presented side-by-side (left and right). Each gamble has a gain
     amount, a loss amount, and a gain probability; the loss probability is
     implicitly 1 − gain_probability.
@@ -29,7 +29,7 @@ data_generation:
     - "expected_value_difference"
     - "gain_difference"
     - "loss_difference"
-    - "probability_difference"
+    # - "probability_difference"
     - "dominance_relation"
     - "previous_expected_value_difference"
     - "value_difference_transition"
@@ -38,7 +38,7 @@ data_generation:
     terms:
       - {factor: expected_value_difference,          coefficient:  0.8}
       - {factor: loss_difference,                    coefficient: -0.4}
-      - {factor: probability_difference,             coefficient:  0.3}
+      # - {factor: probability_difference,             coefficient:  0.3}
       - {factor: dominance_relation, level: left_dominates,  coefficient:  1.0}
       - {factor: dominance_relation, level: right_dominates, coefficient: -1.0}
       - {factor: value_difference_transition, level: switch,  coefficient: -0.2}
@@ -57,10 +57,10 @@ evaluation:
       type: "within_trial"
       factor_class: "continuous"
       levels: []
-    - name: "probability_difference"
-      type: "within_trial"
-      factor_class: "continuous"
-      levels: []
+    # - name: "probability_difference"
+    #   type: "within_trial"
+    #   factor_class: "continuous"
+    #   levels: []
     - name: "dominance_relation"
       type: "within_trial"
       factor_class: "discrete"

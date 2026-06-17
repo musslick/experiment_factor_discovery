@@ -106,7 +106,7 @@ class _SubCfg:
             setattr(self, k, v)
 
     def __getattr__(self, name: str):
-        return None  # return None for any missing attribute
+        raise AttributeError(name)  # lets getattr(obj, name, default) fall back correctly
 
 
 def _make_sub_seeder_cfg(comp: dict) -> _SubCfg:
