@@ -150,14 +150,13 @@ NOVEL_DISCOVERIES = [
         'n':                466,
         'literature_ref':   'cf. Mayr et al., 2003',
         'code': (
-            "def compute_factor(window):\n"
-            "    a = window[0]['color']\n"
-            "    b = window[1]['color']\n"
+            "def compute_factor(w):\n"
+            "    a = w[0]['color']\n"
+            "    b = w[1]['color']\n"
             "    if a == b:\n"
             "        return 'repeat'\n"
             "    return 'switch'"
         ),
-        'sweetpea': "Factor('color_trans_w2', [DerivedLevel(...)])",
     },
     {
         'factor_name':      'Response Repetition Benefit',
@@ -173,14 +172,13 @@ NOVEL_DISCOVERIES = [
         'n':                80,
         'literature_ref':   None,
         'code': (
-            "def compute_factor(window):\n"
-            "    a = window[0]['response']\n"
-            "    b = window[1]['response']\n"
+            "def compute_factor(w):\n"
+            "    a = w[0]['response']\n"
+            "    b = w[1]['response']\n"
             "    if a == b:\n"
             "        return 'repeat'\n"
             "    return 'switch'"
         ),
-        'sweetpea': "Factor('resp_transition', [DerivedLevel(...)])",
     },
     {
         'factor_name':      'Task × Difficulty Interaction',
@@ -197,11 +195,10 @@ NOVEL_DISCOVERIES = [
         'n':                None,
         'literature_ref':   None,
         'code': (
-            "# interaction term (effect search)\n"
+            "# interaction (effect search)\n"
             "C(task_transition)\n"
             "    : C(difficulty)"
         ),
-        'sweetpea': None,
     },
 ]
 

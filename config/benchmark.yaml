@@ -32,9 +32,9 @@ discovery:
   #   synthetic_rdk_task_switching : n_rounds=4, allowed_factor_classes=["discrete", "continuous"]
   #   synthetic_prospect_theory    : n_rounds=5, allowed_factor_classes=["discrete", "continuous"]
   #   empirical_stroop_congruency  : n_rounds=2, allowed_factor_classes=["discrete"]
-  n_rounds: 1                    # how many sequential discovery rounds to run; each round
+  n_rounds: 2                   # how many sequential discovery rounds to run; each round
                                  # attempts to discover one new factor
-  max_search_iterations: 2       # CV iterations per round (seeding counts as iteration 0;
+  max_search_iterations: 1       # CV iterations per round (seeding counts as iteration 0;
                                  # evolver runs max_search_iterations - 1 times), e.g., 3
 
   # ── Predicate synthesis ────────────────────────────────────────────────────
@@ -88,16 +88,26 @@ discovery:
 
   # ── Seeding strategy ───────────────────────────────────────────────────────
   seeding_strategy:
-    type: "random"
-    n_candidates: 50             # number of seed candidates per round, e.g., 50
+    type: "mixed"               # "random", "llm", "mixed"
+    n_candidates: 30             # number of seed candidates per round, e.g., 50
     seed_multiplier: 1.0         # scales n_candidates to set the draw size before truncating
                                  # back to n_candidates; only meaningful with template_bias:
                                  # "cognitive" (weighted sampling + dedup); no effect with "uniform"
-    template_bias: "uniform"
-    max_depends_on: 3
-    max_output_levels: 3
-    max_table_size: 128
-    allow_window: true
+    components:
+    - type: "llm"
+      n_candidates: 15
+    - type: "random"
+      n_candidates: 15
+      template_bias: "uniform"
+      max_depends_on: 3
+      max_output_levels: 3
+      max_table_size: 128
+      allow_window: true                        
+    # template_bias: "uniform"
+    # max_depends_on: 3
+    # max_output_levels: 3
+    # max_table_size: 128
+    # allow_window: true
 
   # ── Evolution strategy ─────────────────────────────────────────────────────
   evolution_strategy:

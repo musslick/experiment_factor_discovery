@@ -70,6 +70,87 @@
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/.venv/bin/python",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Produce Results: Synthetic (all benchmarks)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/produce_results_synthetic.py",
+            "args": ["--config", "config/produce_synthetic.yaml"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Produce Results: Synthetic (quick test, 1 run)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/produce_results_synthetic.py",
+            "args": [
+                "--config", "config/produce_synthetic.yaml",
+                "--n-runs", "5",
+                "--benchmarks", "stroop_simon"
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Produce Results: Empirical (benchmark + discovery)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/produce_results_empirical.py",
+            "args": ["--config", "config/produce_empirical.yaml"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Produce Results: Empirical (benchmark only)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/produce_results_empirical.py",
+            "args": ["--config", "config/produce_empirical.yaml", "--skip-discovery"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Produce Results: Empirical (discovery only)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/produce_results_empirical.py",
+            "args": ["--config", "config/produce_empirical.yaml", "--skip-benchmark"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Make Figures: Synthetic (Figure 2)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/plots/make_figures_synthetic.py",
+            "args": [
+                "--results", "results/aggregated/synthetic_results.json",
+                "--output-dir", "plots/output"
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Make Figures: Empirical (Figures 3 + 4)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/plots/make_figures_empirical.py",
+            "args": [
+                "--results", "results/aggregated/empirical_results.json",
+                "--synthetic-results", "results/aggregated/synthetic_results.json",
+                "--output-dir", "plots/output"
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
         }
     ]
 }

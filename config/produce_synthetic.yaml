@@ -1,0 +1,102 @@
+# Configuration for produce_results_synthetic.py
+# Produce-specific keys (top level):
+#   benchmarks, n_runs, base_seed, output_dir, output_name
+# Everything else is passed as shared defaults to each benchmark config,
+# exactly as benchmark.yaml does for run_benchmark.py.
+
+benchmarks:
+  - stroop_simon
+  - rdk
+  - prospect_theory
+
+n_runs: 10
+base_seed: 0
+output_dir: results/aggregated
+output_name: synthetic_results.json
+
+# ── Shared defaults (merged into each benchmark config) ───────────────────────
+
+benchmark:
+  seed: 42
+  output_dir: "results"
+
+discovery:
+  n_rounds: 4
+  max_search_iterations: 2
+
+  max_synthesis_retries: 2
+  sandbox_timeout_seconds: 10
+  sandbox_backend: "subprocess"
+  docker_image: "python:3.9-slim"
+
+  stability_weight: 1.0
+  complexity_exponent: 0.0
+  depends_on_exponent: 0.0
+  novelty_weight: 0.0
+  cv_n_folds: 5
+  validation_fraction: 0.20
+  min_validation_improvement: 0.001
+
+  decomposition_check_enabled: true
+  decomposition_check_max_arity: 2
+
+  run_effect_search: true
+  max_interaction_order: 2
+  max_interactions_per_round: 1
+  effect_search_full_pass: false
+  effect_search_full_pass_interval:
+  effect_search_min_cv_improvement: 0.05
+  effect_search_min_validation_improvement: 0.001
+  llm_rank_interactions: false
+
+  allowed_factor_types: ["within_trial", "window"]
+  allowed_factor_classes: ["discrete", "continuous"]
+  max_window_width: 4
+
+  stagnation_epsilon: 0.001
+  stagnation_patience: 0
+
+  seeding_strategy:
+    type: "mixed"
+    n_candidates: 50
+    components:
+    - type: "llm"
+      n_candidates: 25
+    - type: "random"
+      n_candidates: 25
+      template_bias: "uniform"
+      max_depends_on: 3
+      max_output_levels: 3
+      max_table_size: 128
+      allow_window: true 
+
+  evolution_strategy:
+    type: "llm_genetic"
+    n_candidates: 10
+    top_k: 3
+    n_elite: 1
+    n_tournament_parents: 2
+    n_diversity_parents: 0
+    operator_mix:
+      mutation: 1.0
+      crossover: 0.0
+      repair: 0.0
+      novel: 0.0
+    diversity_threshold: 0.1
+
+llm:
+  model: "claude-sonnet-4-6"
+  max_tokens_candidate: 2000
+  max_tokens_predicate: 1000
+  candidate_temperature: 0.9
+  predicate_temperature: 0.2
+
+statistical:
+  min_level_count: 5
+  outcome_type: "binary"
+  mixed_effects: false
+
+evaluation:
+  bijection_threshold: 0.95
+  continuous_correlation_threshold: 0.7
+  ground_truth_interactions: []
