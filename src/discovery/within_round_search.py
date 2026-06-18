@@ -49,6 +49,7 @@ from src.analysis.model_comparison import (
     replace_formula_outcome,
     score_candidate_cv,
 )
+from src.discovery.contrast_searcher import generate_level_vs_rest_contrasts
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor, FactorRegistry
 from src.discovery.llm_client import LLMClient
 from src.discovery.predicate_synthesizer import synthesize_predicate
@@ -258,6 +259,100 @@ def _select_winner(all_scored: List[ScoredCandidate]) -> Optional[ScoredCandidat
     return max(all_scored, key=lambda sc: sc.adjusted_score)
 
 
+def _score_precomputed_candidate(
+    candidate: CandidateFactor,
+    series: pd.Series,
+    search_df: pd.DataFrame,
+    config: BenchmarkConfig,
+    registry: FactorRegistry,
+) -> Tuple[Optional[ScoredCandidate], Optional[str]]:
+    """
+    Score an already-computed candidate series with the standard CV objective.
+
+    Ordinary synthesized candidates and automatically derived level contrasts
+    use this same path, so contrasts are judged against the same baseline as
+    their parent factors.
+    """
+    disc_cfg = config.discovery
+    ref_series = _collect_reference_series(
+        search_df, config.base_factors, registry, candidate.factor_class
+    )
+    novelty = _compute_novelty_score(series, candidate.factor_class, ref_series)
+
+    col_name = candidate.name
+    search_with_col = search_df.copy()
+    search_with_col[col_name] = series
+
+    formula_null = registry.get_current_formula()
+    formula_alt = build_extended_formula(
+        formula_null,
+        col_name,
+        factor_class=candidate.factor_class,
+    )
+
+    outcome_defs = config.outcome_variable_defs
+    per_outcome_cvs: Dict[str, CVScore] = {}
+    current_lhs = formula_null.split("~")[0].strip()
+    for od in outcome_defs:
+        lhs = current_lhs if od.name in current_lhs else od.name
+        f_null = replace_formula_outcome(formula_null, lhs)
+        f_alt = replace_formula_outcome(formula_alt, lhs)
+        try:
+            cv_o = score_candidate_cv(
+                df=search_with_col,
+                formula_null=f_null,
+                formula_alt=f_alt,
+                participant_col="participant_id",
+                n_folds=disc_cfg.cv_n_folds,
+                random_state=config.seed,
+                spec=config.model_specs[od.name],
+            )
+        except Exception as exc:
+            return None, f"cv_error ({od.name}): {exc}"
+        per_outcome_cvs[od.name] = cv_o
+
+    multi_cv = MultiOutcomeCVScore(per_outcome=per_outcome_cvs)
+    primary_cv = per_outcome_cvs[outcome_defs[0].name]
+    adj = _compute_adjusted_score(
+        multi_cv.joint_mean,
+        primary_cv.se_ll_improvement,
+        candidate,
+        disc_cfg.stability_weight,
+        disc_cfg.complexity_exponent,
+        disc_cfg.depends_on_exponent,
+        novelty_score=novelty,
+        novelty_weight=disc_cfg.novelty_weight,
+    )
+    return ScoredCandidate(
+        candidate=candidate,
+        cv_score_mean=multi_cv.joint_mean,
+        cv_score_se=primary_cv.se_ll_improvement,
+        adjusted_score=adj,
+        cv_score=primary_cv,
+        multi_cv_score=multi_cv,
+        column_values=series,
+        novelty_score=novelty,
+    ), None
+
+
+def _format_score(sc: ScoredCandidate, config: BenchmarkConfig) -> str:
+    outcome_defs = config.outcome_variable_defs
+    disc_cfg = config.discovery
+    novelty_str = f" novelty={sc.novelty_score:.3f}" if disc_cfg.novelty_weight > 0.0 else ""
+    if len(outcome_defs) > 1 and sc.multi_cv_score is not None:
+        outcome_parts = " ".join(
+            f"{od.name}={sc.multi_cv_score.per_outcome[od.name].mean_ll_improvement:.4f}"
+            for od in outcome_defs
+        )
+        return f"✓ joint_mean={sc.cv_score_mean:.4f} [{outcome_parts}]{novelty_str}"
+    return (
+        f"✓ cv_mean={sc.cv_score.mean_ll_improvement:.4f} "
+        f"±se={sc.cv_score.se_ll_improvement:.4f} "
+        f"(n={sc.cv_score.n_participants})"
+        f"{novelty_str}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Context builder
 # ---------------------------------------------------------------------------
@@ -448,89 +543,60 @@ def run_within_round_search(
                     candidate.coarsening_of = decomp_factors
                     print(f"~ coarsening of {decomp_factors} (proceeding to CV scoring)", end=" ", flush=True)
 
-            # --- novelty relative to known factor space ---
-            ref_series = _collect_reference_series(
-                search_df, config.base_factors, registry, candidate.factor_class
-            )
-            novelty = _compute_novelty_score(series, candidate.factor_class, ref_series)
-
             # --- CV scoring (all outcomes) ---
-            col_name = candidate.name
-            search_with_col = search_df.copy()
-            search_with_col[col_name] = series
-
-            formula_null = registry.get_current_formula()
-            formula_alt  = build_extended_formula(formula_null, col_name, factor_class=candidate.factor_class)
-
-            outcome_defs = config.outcome_variable_defs
-            per_outcome_cvs: Dict[str, CVScore] = {}
-            cv_failed = False
-            current_lhs = formula_null.split("~")[0].strip()
-            for od in outcome_defs:
-                lhs = current_lhs if od.name in current_lhs else od.name
-                f_null = replace_formula_outcome(formula_null, lhs)
-                f_alt  = replace_formula_outcome(formula_alt,  lhs)
-                try:
-                    cv_o = score_candidate_cv(
-                        df=search_with_col,
-                        formula_null=f_null,
-                        formula_alt=f_alt,
-                        participant_col="participant_id",
-                        n_folds=disc_cfg.cv_n_folds,
-                        random_state=config.seed,
-                        spec=config.model_specs[od.name],
-                    )
-                    per_outcome_cvs[od.name] = cv_o
-                except Exception as exc:
-                    reason = f"cv_error ({od.name}): {exc}"
-                    registry.hard_reject(candidate, reason)
-                    hard_rejected_in_round.append(candidate)
-                    print(f"✗ {reason}")
-                    cv_failed = True
-                    break
-
-            if cv_failed:
+            sc, score_error = _score_precomputed_candidate(
+                candidate, series, search_df, config, registry
+            )
+            if sc is None:
+                reason = score_error or "cv_error"
+                registry.hard_reject(candidate, reason)
+                hard_rejected_in_round.append(candidate)
+                print(f"✗ {reason}")
                 continue
 
-            multi_cv = MultiOutcomeCVScore(per_outcome=per_outcome_cvs)
-            primary_cv = per_outcome_cvs[outcome_defs[0].name]
-
-            evaluated_names.add(col_name)
-            adj = _compute_adjusted_score(
-                multi_cv.joint_mean,
-                primary_cv.se_ll_improvement,
-                candidate,
-                disc_cfg.stability_weight,
-                disc_cfg.complexity_exponent,
-                disc_cfg.depends_on_exponent,
-                novelty_score=novelty,
-                novelty_weight=disc_cfg.novelty_weight,
-            )
-            sc = ScoredCandidate(
-                candidate=candidate,
-                cv_score_mean=multi_cv.joint_mean,
-                cv_score_se=primary_cv.se_ll_improvement,
-                adjusted_score=adj,
-                cv_score=primary_cv,
-                multi_cv_score=multi_cv,
-                column_values=series,
-                novelty_score=novelty,
-            )
+            evaluated_names.add(candidate.name)
             newly_scored.append(sc)
-            novelty_str = f" novelty={novelty:.3f}" if disc_cfg.novelty_weight > 0.0 else ""
-            if len(outcome_defs) > 1:
-                outcome_parts = " ".join(
-                    f"{od.name}={per_outcome_cvs[od.name].mean_ll_improvement:.4f}"
-                    for od in outcome_defs
+            print(_format_score(sc, config))
+
+            # --- automated contrast search ---
+            if getattr(disc_cfg, "run_contrast_search", True):
+                contrast_pairs = generate_level_vs_rest_contrasts(
+                    candidate,
+                    series,
+                    max_contrasts=getattr(disc_cfg, "max_contrasts_per_candidate", 8),
                 )
-                print(f"✓ joint_mean={multi_cv.joint_mean:.4f} [{outcome_parts}]{novelty_str}")
-            else:
-                print(
-                    f"✓ cv_mean={primary_cv.mean_ll_improvement:.4f} "
-                    f"±se={primary_cv.se_ll_improvement:.4f} "
-                    f"(n={primary_cv.n_participants})"
-                    f"{novelty_str}"
-                )
+                for contrast, raw_contrast_series in contrast_pairs:
+                    if registry.is_duplicate(contrast) or contrast.name in evaluated_names:
+                        continue
+
+                    contrast_series, contrast_valid, contrast_reason = encode_factor(
+                        raw_values=list(raw_contrast_series),
+                        df_index=search_df.index,
+                        declared_levels=contrast.levels,
+                        min_level_count=stat_cfg.min_level_count,
+                        factor_class=contrast.factor_class,
+                    )
+                    print(f"    ↳ contrast {contrast.name}", end=" ", flush=True)
+                    if not contrast_valid:
+                        reason = f"encoding: {contrast_reason}"
+                        registry.hard_reject(contrast, reason)
+                        hard_rejected_in_round.append(contrast)
+                        print(f"✗ {reason}")
+                        continue
+
+                    contrast_sc, contrast_error = _score_precomputed_candidate(
+                        contrast, contrast_series, search_df, config, registry
+                    )
+                    if contrast_sc is None:
+                        reason = contrast_error or "cv_error"
+                        registry.hard_reject(contrast, reason)
+                        hard_rejected_in_round.append(contrast)
+                        print(f"✗ {reason}")
+                        continue
+
+                    evaluated_names.add(contrast.name)
+                    newly_scored.append(contrast_sc)
+                    print(_format_score(contrast_sc, config))
 
         all_scored.extend(newly_scored)
 
