@@ -49,12 +49,34 @@ FACTOR_DISPLAY_NAMES = {
     "value_difference_transition":        "value diff. transition",
 }
 
+# ── Compact derivation formulas shown below each factor bar ──────────────────
+
+FACTOR_FORMULAS = {
+    # Response Interference (Stroop-Simon)
+    "word_color_congruency":              "word = color",
+    "location_response_congruency":       "location = response",
+    "congruency_previous_trial":          "wcc[n−1]",
+    "response_transition":                "response[n] = response[n−1]",
+    # Task Switching (RDK)
+    "task_transition":                    "task[n] = task[n−1]",
+    "current_stimulus_difficulty":        "1 − coherence[n]",
+    "past_stimulus_difficulty":           "1 − coherence[n−1]",
+    "n2_task_inhibition":                 "task[n] = task[n−2]",
+    # Decision Making (Prospect Theory)
+    "expected_value_difference":          "EV_L − EV_R",
+    "gain_difference":                    "gain_L − gain_R",
+    "loss_difference":                    "loss_L − loss_R",
+    "dominance_relation":                 "gain_L ≥ gain_R, loss_L ≤ loss_R, p_L ≥ p_R",
+    "previous_expected_value_difference": "EV_diff[n−1]",
+    "value_difference_transition":        "sign(EV_diff[n]) = sign(EV_diff[n−1])",
+}
+
 # Display-name ordering for benchmarks (detected by substring match on display_name)
 BENCHMARK_ORDER_KEYS = ["Stroop", "RDK", "Prospect"]
 BENCHMARK_XTICKLABELS = {
-    "Stroop":   "Stroop-Simon",
-    "RDK":      "RDK\nTask-Switching",
-    "Prospect": "Prospect\nTheory",
+    "Stroop":   "Response\nInterference",
+    "RDK":      "Task\nSwitching",
+    "Prospect": "Decision\nMaking",
 }
 
 
@@ -220,6 +242,7 @@ def _build_factor_rows(benchmark_order, benchmarks_dict):
             fname = factor_info["name"]
             mean, se = _factor_recovery(fname, factor_info, runs)
             rows.append({
+                "name":    fname,
                 "label":   _factor_display(fname),
                 "bench":   xlabel,
                 "type":    factor_info.get("type", "within_trial"),
@@ -257,10 +280,10 @@ def make_figure(results_path, output_dir, show=True):
 
     # ── Figure layout ─────────────────────────────────────────────────────────
 
-    fig = plt.figure(figsize=(style.W2, 8.2))
+    fig = plt.figure(figsize=(style.W2, 6.5))
 
     outer = gridspec.GridSpec(1, 2, figure=fig,
-                              width_ratios=[2.6, 4.2], wspace=0.42)
+                              width_ratios=[2.6, 4.2], wspace=0.90)
 
     left = gridspec.GridSpecFromSubplotSpec(
         2, 1, subplot_spec=outer[0],
@@ -278,7 +301,7 @@ def make_figure(results_path, output_dir, show=True):
     metric_labels = ["Precision", "Recall", "F1"]
     n_bench = len(benchmark_order)
     bar_w = 0.22
-    group_gap = 0.85
+    group_gap = 1.05
     x_centers = np.arange(n_bench) * group_gap
 
     for i, (metric, label) in enumerate(zip(metrics, metric_labels)):
@@ -290,15 +313,10 @@ def make_figure(results_path, output_dir, show=True):
                  yerr=ses, error_kw=dict(lw=0.8, capsize=2.5, capthick=0.8),
                  zorder=3)
 
-    # Annotate number of ground-truth factors above each group
-    for xi, n in zip(x_centers, bench_n_gt):
-        ax_a.text(xi, 1.05, f"{n} factors", ha="center", va="bottom",
-                  fontsize=style.FS_ANNOT, color="#555555", clip_on=False)
-
     ax_a.set_xticks(x_centers)
     ax_a.set_xticklabels(bench_xlabels, fontsize=style.FS_TICK)
     ax_a.set_ylabel("Score", fontsize=style.FS_LABEL)
-    ax_a.set_ylim(0, 1.12)
+    ax_a.set_ylim(0, 1.05)
     ax_a.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
     ax_a.legend(loc="upper right", fontsize=style.FS_ANNOT,
                 frameon=False, ncol=1, handlelength=1.0)
@@ -309,14 +327,28 @@ def make_figure(results_path, output_dir, show=True):
     # Panel C — 2x2 Factor-type recall matrix
     # ═════════════════════════════════════════════════════════════════════════
 
-    im = ax_c.imshow(heatmap_matrix, aspect="auto",
-                     cmap="Blues", vmin=0, vmax=1,
-                     interpolation="nearest")
+    # Build per-cell RGBA using flat factor-type colors
+    _c_color_keys = [
+        ['within_trial_discrete', 'within_trial_continuous'],
+        ['window_discrete',       'window_continuous'],
+    ]
+    cell_rgba = np.zeros((2, 2, 4))
+    for r in range(2):
+        for c in range(2):
+            hex_color = style.FACTOR_COLORS[_c_color_keys[r][c]]
+            cell_rgba[r, c, 0] = int(hex_color[1:3], 16) / 255.0
+            cell_rgba[r, c, 1] = int(hex_color[3:5], 16) / 255.0
+            cell_rgba[r, c, 2] = int(hex_color[5:7], 16) / 255.0
+            cell_rgba[r, c, 3] = 1.0
+
+    ax_c.imshow(cell_rgba, aspect="auto", interpolation="nearest")
 
     for row in range(2):
         for col in range(2):
             val = heatmap_matrix[row, col]
-            text_color = "white" if val > 0.55 else "#333333"
+            rgb = cell_rgba[row, col, :3]
+            lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+            text_color = "white" if lum < 0.55 else "#333333"
             ax_c.text(col, row, f"{val:.2f}",
                       ha="center", va="center",
                       fontsize=style.FS_LABEL, color=text_color,
@@ -325,18 +357,12 @@ def make_figure(results_path, output_dir, show=True):
     ax_c.set_xticks([0, 1])
     ax_c.set_xticklabels(["Discrete", "Continuous"], fontsize=style.FS_TICK)
     ax_c.set_yticks([0, 1])
-    ax_c.set_yticklabels(["Within-trial", "Window"], fontsize=style.FS_TICK)
+    ax_c.set_yticklabels(["Within-trial", "Across-trial"], fontsize=style.FS_TICK)
     ax_c.set_xlabel("Factor class", fontsize=style.FS_LABEL, labelpad=4)
     ax_c.set_ylabel("Factor scope", fontsize=style.FS_LABEL, labelpad=4)
     ax_c.tick_params(length=0)
     for sp in ax_c.spines.values():
         sp.set_visible(False)
-
-    cbar = fig.colorbar(im, ax=ax_c, orientation="horizontal",
-                        fraction=0.07, pad=0.22, shrink=0.85)
-    cbar.ax.tick_params(labelsize=style.FS_ANNOT)
-    cbar.set_ticks([0, 0.5, 1.0])
-    cbar.set_label("Recovery score", fontsize=style.FS_ANNOT, labelpad=3)
 
     style.panel_label(ax_c, "C", x=-0.16)
 
@@ -345,22 +371,24 @@ def make_figure(results_path, output_dir, show=True):
     # ═════════════════════════════════════════════════════════════════════════
 
     n_factors = len(factor_rows)
-    y_positions = np.arange(n_factors)
+    BAR_SPACING = 0.75
+    y_positions = np.arange(n_factors) * BAR_SPACING
+    bar_height  = 0.44
 
     for i, row in enumerate(factor_rows):
         color_key = f"{row['type']}_{row['class']}"
         color = style.FACTOR_COLORS.get(color_key, "#999999")
         is_cont = row["class"] == "continuous"
 
-        ax_b.barh(i, row["mean"], height=0.58,
+        ax_b.barh(y_positions[i], row["mean"], height=bar_height,
                   color=color, alpha=0.90, zorder=3)
 
         if is_cont:
-            ax_b.barh(i, row["mean"], height=0.58,
+            ax_b.barh(y_positions[i], row["mean"], height=bar_height,
                       color="none", hatch=style.CONTINUOUS_HATCH,
                       edgecolor=color, linewidth=0.0, zorder=4)
 
-        ax_b.errorbar(row["mean"], i, xerr=row["se"], fmt="none",
+        ax_b.errorbar(row["mean"], y_positions[i], xerr=row["se"], fmt="none",
                       color="#444444", lw=0.8, capsize=2.5, capthick=0.8,
                       zorder=5)
 
@@ -369,9 +397,23 @@ def make_figure(results_path, output_dir, show=True):
     ax_b.set_yticklabels([r["label"] for r in factor_rows], fontsize=style.FS_ANNOT)
     ax_b.invert_yaxis()
 
+    # Formula annotations below each factor name
+    for i, row in enumerate(factor_rows):
+        formula = FACTOR_FORMULAS.get(row["name"], "")
+        if formula:
+            ax_b.text(
+                0.0, y_positions[i] + 0.28,
+                formula,
+                transform=style.blended(ax_b),
+                ha="right", va="top",
+                fontsize=style.FS_CODE,
+                fontstyle="italic",
+                color="#888888",
+                clip_on=False,
+            )
+
     # Benchmark section separators + right-side labels
     sep_color = "#BBBBBB"
-    header_x = 1.06
 
     # Identify group boundaries
     current_bench = None
@@ -387,21 +429,21 @@ def make_figure(results_path, output_dir, show=True):
         groups.append((current_bench, group_start, len(factor_rows) - 1))
 
     for bench_name, start, end in groups:
-        mid_data = (start + end) / 2.0
+        sep_y = y_positions[start] - 0.38
 
         if start > 0:
-            ax_b.axhline(start - 0.5, color=sep_color, lw=0.8, zorder=0,
+            ax_b.axhline(sep_y, color=sep_color, lw=0.8, zorder=0,
                          xmin=0, xmax=1)
 
-        ax_b.text(header_x, mid_data,
+        ax_b.text(0.98, sep_y,
                   bench_name,
                   transform=style.blended(ax_b),
-                  ha="left", va="center",
+                  ha="right", va="bottom",
                   fontsize=style.FS_ANNOT, fontweight="bold", color="#444444",
-                  rotation=0, clip_on=False)
+                  clip_on=False)
 
     ax_b.set_xlabel(
-        "Recovery score  (level recall  |  |Spearman ρ|)",
+        "Recovery score  (recall  |  |Spearman ρ|)",
         fontsize=style.FS_LABEL)
     ax_b.set_xlim(0, 1.0)
     ax_b.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
@@ -416,7 +458,7 @@ def make_figure(results_path, output_dir, show=True):
         mpatches.Patch(facecolor=style.FACTOR_COLORS["within_trial_discrete"],
                        label="Within-trial, discrete"),
         mpatches.Patch(facecolor=style.FACTOR_COLORS["window_discrete"],
-                       label="Window, discrete"),
+                       label="Across-trial, discrete"),
         mpatches.Patch(facecolor=style.FACTOR_COLORS["within_trial_continuous"],
                        hatch=style.CONTINUOUS_HATCH,
                        edgecolor=style.FACTOR_COLORS["within_trial_continuous"],
@@ -424,11 +466,15 @@ def make_figure(results_path, output_dir, show=True):
         mpatches.Patch(facecolor=style.FACTOR_COLORS["window_continuous"],
                        hatch=style.CONTINUOUS_HATCH,
                        edgecolor=style.FACTOR_COLORS["window_continuous"],
-                       label="Window, continuous (|ρ|)"),
+                       label="Across-trial, continuous (|ρ|)"),
     ]
-    ax_b.legend(handles=legend_handles, loc="lower right",
+    ax_b.legend(handles=legend_handles, loc="lower center",
+                bbox_to_anchor=(0.5, 1.01),
+                bbox_transform=ax_b.transAxes,
+                ncol=2,
                 fontsize=style.FS_ANNOT, frameon=False,
-                handlelength=1.2, handleheight=0.9)
+                handlelength=1.2, handleheight=0.9,
+                columnspacing=1.0)
 
     style.panel_label(ax_b, "B", x=-0.04)
 

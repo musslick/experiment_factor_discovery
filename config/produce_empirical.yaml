@@ -62,14 +62,18 @@ benchmark_shared:
     stagnation_patience: 0
 
     seeding_strategy:
-      type: "random"
+      type: "mixed"
       n_candidates: 50
-      seed_multiplier: 1.0
-      template_bias: "uniform"
-      max_depends_on: 3
-      max_output_levels: 3
-      max_table_size: 128
-      allow_window: true
+      components:
+      - type: "llm"
+        n_candidates: 25
+      - type: "random"
+        n_candidates: 25
+        template_bias: "uniform"
+        max_depends_on: 3
+        max_output_levels: 3
+        max_table_size: 128
+        allow_window: true 
 
     evolution_strategy:
       type: "llm_genetic"
