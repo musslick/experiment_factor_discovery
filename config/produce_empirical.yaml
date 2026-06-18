@@ -11,9 +11,17 @@
 datasets:
   - stroop_congruency
   - janker
+  - digit_task_switching
+  - flanker_congruency
+  - grange_n2_task
+  - hirsch_dual_task
+  - brooks_prospect_theory
+  - strittmatter
+  - weber_with_rewards
+  - weber_without_rewards
 
-n_benchmark_runs: 10
-n_discovery_runs: 3
+n_benchmark_runs: 0
+n_discovery_runs: 1
 base_seed: 0
 output_dir: results/aggregated
 output_name: empirical_results.json
@@ -91,15 +99,14 @@ benchmark_shared:
 
   llm:
     model: "claude-sonnet-4-6"
-    max_tokens_candidate: 2000
+    max_tokens_candidate: 8000
     max_tokens_predicate: 1000
     candidate_temperature: 0.9
     predicate_temperature: 0.2
 
   statistical:
     min_level_count: 5
-    outcome_type: "binary"
-    mixed_effects: false
+    mixed_effects: false  # basic GLM only; outcome_type set per dataset
 
   evaluation:
     bijection_threshold: 0.95
@@ -114,8 +121,8 @@ discovery_shared:
     output_dir: "results"
 
   discovery:
-    n_rounds: 5
-    max_search_iterations: 3
+    n_rounds: 3
+    max_search_iterations: 2
 
     max_synthesis_retries: 2
     sandbox_timeout_seconds: 30
@@ -150,14 +157,18 @@ discovery_shared:
     stagnation_patience: 2
 
     seeding_strategy:
-      type: "random"
-      n_candidates: 50
-      seed_multiplier: 1.0
-      template_bias: "uniform"
-      max_depends_on: 3
-      max_output_levels: 3
-      max_table_size: 128
-      allow_window: true
+      type: "mixed"
+      n_candidates: 40
+      components:
+      - type: "llm"
+        n_candidates: 15
+      - type: "random"
+        n_candidates: 25
+        template_bias: "uniform"
+        max_depends_on: 3
+        max_output_levels: 3
+        max_table_size: 128
+        allow_window: true 
 
     evolution_strategy:
       type: "llm_genetic"
@@ -175,15 +186,14 @@ discovery_shared:
 
   llm:
     model: "claude-sonnet-4-6"
-    max_tokens_candidate: 2000
+    max_tokens_candidate: 8000
     max_tokens_predicate: 1000
     candidate_temperature: 0.9
     predicate_temperature: 0.2
 
   statistical:
     min_level_count: 5
-    outcome_type: "binary"
-    mixed_effects: true
+    mixed_effects: false  # basic GLM only; outcome_type set per dataset
 
   evaluation:
     bijection_threshold: 0.95

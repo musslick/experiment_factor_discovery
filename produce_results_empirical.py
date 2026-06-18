@@ -32,6 +32,7 @@ import yaml
 
 from run_benchmark import run_single_benchmark
 from run_discovery import run_single_discovery
+from src.data_generation.empirical_loader import load_empirical_data
 from src.discovery.factor_registry import CandidateFactor
 from src.discovery.within_round_search import compute_factor_column
 from src.utils.config import BenchmarkConfig, load_config
@@ -41,8 +42,16 @@ from src.utils.config import BenchmarkConfig, load_config
 # ---------------------------------------------------------------------------
 
 DATASET_CONFIGS: Dict[str, str] = {
-    "stroop_congruency": "config/empirical_stroop_congruency.yaml",
-    "janker": "config/empirical_janker_et_al.yaml",
+    "stroop_congruency":      "config/empirical_stroop_congruency.yaml",
+    "janker":                 "config/empirical_janker_et_al.yaml",
+    "digit_task_switching":   "config/empirical_digit_task_switiching.yaml",
+    "flanker_congruency":     "config/empirical_flanker_congruency.yaml",
+    "grange_n2_task":         "config/empirical_grange_rr_n-2_task.yaml",
+    "hirsch_dual_task":       "config/empirical_hirsch_et_al_dual_task.yaml",
+    "brooks_prospect_theory": "config/empirical_prospect_theory_brooks_et_al.yaml",
+    "strittmatter":           "config/empirical_strittmatter_et_al.yaml",
+    "weber_with_rewards":     "config/empirical_weber_et_al_with_rewards.yaml",
+    "weber_without_rewards":  "config/empirical_weber_et_al_without_rewards.yaml",
 }
 
 OUTCOME_DISPLAY: Dict[str, str] = {
@@ -227,76 +236,66 @@ def _compute_participant_level_data(
     if not compute_code:
         return None
 
+    # Use load_empirical_data so that trial_index is added (required by the sandbox
+    # harness) and all columns (including hidden factors promoted to base in
+    # discovery mode) are available for the compute_code.
     try:
-        df = pd.read_csv(cfg.dataset.path)
+        full_df, _ = load_empirical_data(cfg)
     except Exception as exc:
-        print(f"    [WARN] Could not load dataset {cfg.dataset.path}: {exc}")
-        return None
-
-    participant_id_col = cfg.dataset.participant_id_column
-    # Normalise participant_id column name to 'participant_id' for the pipeline
-    if participant_id_col in df.columns and participant_id_col != "participant_id":
-        df = df.rename(columns={participant_id_col: "participant_id"})
-        participant_id_col = "participant_id"
-
-    if participant_id_col not in df.columns:
-        print(f"    [WARN] participant_id column '{participant_id_col}' not in dataset")
+        print(f"    [WARN] Could not load dataset for {cfg.name}: {exc}")
         return None
 
     outcome_var = cfg.dataset.outcome_variable
-    if outcome_var not in df.columns:
+    if outcome_var not in full_df.columns:
         print(f"    [WARN] outcome variable '{outcome_var}' not in dataset")
         return None
 
     factor_type = factor_info.get("factor_type", _infer_factor_type(compute_code))
     window_width = factor_info.get("window_width", _infer_window_width(compute_code))
     levels_declared = factor_info.get("levels", [])
+    # Empty levels list indicates a continuous factor
+    factor_class = "continuous" if not levels_declared else "discrete"
 
     candidate = CandidateFactor(
         name=factor_info.get("name", "discovered_factor"),
         description="",
         factor_type=factor_type,
         levels=list(levels_declared),
-        depends_on=[bf.name for bf in cfg.base_factors],
-        factor_class="discrete",
+        depends_on=list(full_df.columns),  # all columns → no payload filtering in sandbox
+        factor_class=factor_class,
         window_width=window_width,
         compute_code=compute_code,
     )
 
     try:
-        factor_series = compute_factor_column(candidate, df, cfg, min_level_count=1)
+        factor_series = compute_factor_column(candidate, full_df, cfg, min_level_count=1)
     except Exception as exc:
-        print(f"    [WARN] compute_factor_column failed: {exc}")
+        print(f"    [WARN] compute_factor_column failed for {candidate.name}: {exc}")
         return None
 
     if factor_series is None:
         print(f"    [WARN] compute_factor_column returned None for {candidate.name}")
         return None
 
-    # Attach factor column to df (aligning by index)
-    df = df.copy()
+    df = full_df.copy()
     df["_factor_col"] = factor_series
 
-    # Drop rows where factor or outcome is null
     mask = df["_factor_col"].notna() & df[outcome_var].notna()
     df = df[mask]
 
     if df.empty:
         return None
 
-    # Determine unique sorted levels
     unique_levels = sorted(df["_factor_col"].unique().tolist(), key=str)
 
-    # Compute per-participant means for each level
     participant_means: Dict[str, List[float]] = {str(lv): [] for lv in unique_levels}
-    grouped = df.groupby([participant_id_col, "_factor_col"])[outcome_var].mean()
+    grouped = df.groupby(["participant_id", "_factor_col"])[outcome_var].mean()
 
     for (pid, lv), val in grouped.items():
         key = str(lv)
         if key in participant_means:
             participant_means[key].append(float(val))
 
-    # Compute group means and SEMs across participants
     group_means = []
     group_sems = []
     for lv in unique_levels:

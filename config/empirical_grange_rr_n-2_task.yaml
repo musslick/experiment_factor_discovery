@@ -40,10 +40,7 @@ statistical:
   # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
   # For accuracy: the LHS is replaced with the bare column name (no transform), and the
   #   logistic model family is selected by type: "binary".
-  outcome_variables:
-    - name: latency   # primary — must appear in null_formula LHS ("np.log(latency)")
-      type: continuous
-    - name: accuracy   # secondary — must be a 0/1 column in the CSV
-      type: binary
+  outcome_type: "continuous"  # latency → linear regression (GLM)
+  mixed_effects: false
 
 # No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.

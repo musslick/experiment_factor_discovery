@@ -21,8 +21,14 @@ import matplotlib.gridspec as gridspec
 from matplotlib.patches import Rectangle
 import numpy as np
 
-# ── Style ─────────────────────────────────────────────────────────────────────
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ── Paths ─────────────────────────────────────────────────────────────────────
+# Add the repo root (parent of plots/) so src.* and produce_results_empirical
+# are importable when computing participant-level data on-the-fly.
+_PLOTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT  = os.path.dirname(_PLOTS_DIR)
+sys.path.insert(0, _PLOTS_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 import style
 
 style.apply_style()
@@ -290,13 +296,217 @@ def make_figure3(emp_data: dict, syn_data: dict, out_dir: str, show: bool):
 # Figure 4
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _load_cfg_meta(config_path: str) -> dict:
+    """
+    Read key dataset metadata directly from the YAML config without importing
+    any src.* modules (avoids sweetpea / statsmodels version conflicts in the
+    plotting environment).
+    Returns a plain dict with 'path', 'participant_id_column', 'outcome_variable',
+    'null_formula', and 'hidden_factor_columns', or {} on failure.
+    """
+    if not config_path:
+        return {}
+    try:
+        import yaml
+        with open(config_path) as fh:
+            raw = yaml.safe_load(fh) or {}
+        ds = raw.get("dataset", {})
+        hidden_cols = []
+        for hf in ds.get("hidden_factors", []):
+            if isinstance(hf, dict):
+                hidden_cols.append(hf.get("column") or hf.get("name", ""))
+        return {
+            "path":                  ds.get("path", ""),
+            "participant_id_column": ds.get("participant_id_column", "participant_id"),
+            "outcome_variable":      ds.get("outcome_variable", ""),
+            "null_formula":          ds.get("null_formula", ""),
+            "hidden_factor_columns": hidden_cols,
+        }
+    except Exception as exc:
+        print(f"  [WARN] Could not read config {config_path}: {exc}")
+        return {}
+
+
+_SANDBOX_HARNESS = """\
+import json, sys, collections
+
+{predicate_code}
+
+data         = json.loads(sys.stdin.buffer.read().decode('utf-8'))
+rows         = data['rows']
+factor_type  = data['factor_type']
+window_width = data.get('window_width', 2)
+n            = data['n']
+
+results = [None] * n
+by_group = collections.defaultdict(list)
+for row in rows:
+    by_group[(row['participant_id'], row.get('block_index', -1))].append(row)
+
+try:
+    for group_key in sorted(by_group.keys()):
+        p_rows = sorted(by_group[group_key], key=lambda r: r['trial_index'])
+        for i, row in enumerate(p_rows):
+            orig = row['__idx__']
+            if factor_type == 'within_trial':
+                results[orig] = compute_factor(row)
+            else:
+                if i < window_width - 1:
+                    results[orig] = None
+                else:
+                    results[orig] = compute_factor(p_rows[i - window_width + 1 : i + 1])
+except Exception:
+    import traceback
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
+
+print(json.dumps(results))
+"""
+
+
+def _compute_pld_for_plot(factor_dict: dict, meta: dict, outcome_label: str):
+    """
+    Compute participant-level data on-the-fly using only stdlib + pandas.
+    Runs the predicate compute_code in a subprocess harness (same mechanism as
+    the discovery pipeline sandbox) without importing any src.* modules.
+
+    Returns the pld dict or None on failure.
+    """
+    import re, json, os, subprocess, tempfile
+    import pandas as pd
+
+    compute_code = factor_dict.get("compute_code", "")
+    csv_path     = meta.get("path", "")
+    if not compute_code or not csv_path:
+        return None
+
+    pid_col     = meta.get("participant_id_column", "participant_id")
+    outcome_var = meta.get("outcome_variable", "")
+    if not outcome_var:
+        return None
+
+    # ── Load CSV and pre-process ──────────────────────────────────────────────
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as exc:
+        print(f"  [WARN] Could not read {csv_path}: {exc}")
+        return None
+
+    if pid_col in df.columns and pid_col != "participant_id":
+        df = df.rename(columns={pid_col: "participant_id"})
+    if "participant_id" not in df.columns:
+        return None
+    if outcome_var not in df.columns:
+        return None
+    if "trial_index" not in df.columns:
+        df["trial_index"] = df.groupby("participant_id", sort=False).cumcount()
+
+    df = df.reset_index(drop=True)
+
+    # ── Infer factor type / window width from predicate signature ─────────────
+    name   = factor_dict.get("name", "factor")
+    levels = factor_dict.get("levels", [])
+
+    # ── Infer factor_type: check compute_factor signature, then fall back to
+    #    _parent_compute_factor (used by contrast/level-vs-rest derivatives).
+    sig_m = re.search(r"def\s+compute_factor\s*\(\s*(\w+)", compute_code)
+    par_m = re.search(r"def\s+_parent_compute_factor\s*\(\s*(\w+)", compute_code)
+    factor_type = "within_trial"
+    for m in (sig_m, par_m):
+        if m and m.group(1) in ("window", "w"):
+            factor_type = "window"
+            break
+
+    # ── Infer window_width from literal indices used with the window variable.
+    #    Positive index k → need at least k+1 elements.
+    #    Negative index -k → need at least k elements (wraps from end).
+    required = 2
+    for idx_str in re.findall(r"\[(-?\d+)\]", compute_code):
+        idx = int(idx_str)
+        required = max(required, idx + 1 if idx >= 0 else abs(idx))
+    window_width = required if factor_type == "window" else 1
+
+    # ── Serialize DataFrame for subprocess harness ────────────────────────────
+    records = json.loads(df.to_json(orient="records", default_handler=str))
+    for i, row in enumerate(records):
+        row["__idx__"] = i
+    payload = json.dumps({
+        "rows": records, "factor_type": factor_type,
+        "window_width": window_width, "n": len(df),
+    })
+
+    harness_src = _SANDBOX_HARNESS.format(predicate_code=compute_code)
+
+    fd, harness_path = tempfile.mkstemp(suffix=".py", prefix="fig4_harness_")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(harness_src)
+        try:
+            proc = subprocess.run(
+                [sys.executable, harness_path],
+                input=payload.encode("utf-8"),
+                capture_output=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"  [WARN] Sandbox timed out for {name}")
+            return None
+    finally:
+        os.unlink(harness_path)
+
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace")[:300]
+        print(f"  [WARN] Sandbox error for {name}: {err}")
+        return None
+
+    try:
+        raw_values = json.loads(proc.stdout.decode("utf-8"))
+    except Exception:
+        return None
+
+    # ── Attach results and aggregate ──────────────────────────────────────────
+    df["_fc"] = raw_values
+    df = df[df["_fc"].notna() & df[outcome_var].notna()]
+    if df.empty:
+        return None
+
+    unique_lvls = list(levels) if levels else sorted(df["_fc"].unique().tolist(), key=str)
+    part_means  = {str(lv): [] for lv in unique_lvls}
+    for (pid, lv), val in df.groupby(["participant_id", "_fc"])[outcome_var].mean().items():
+        key = str(lv)
+        if key in part_means:
+            part_means[key].append(float(val))
+
+    # Drop levels with no participant data
+    unique_lvls = [lv for lv in unique_lvls if part_means.get(str(lv))]
+
+    group_means, group_sems = [], []
+    for lv in unique_lvls:
+        vals = part_means[str(lv)]
+        arr  = np.array(vals)
+        group_means.append(float(np.mean(arr)))
+        group_sems.append(
+            float(np.std(arr, ddof=1) / math.sqrt(len(arr))) if len(arr) > 1 else 0.0
+        )
+
+    return {
+        "outcome_label":     outcome_label,
+        "levels":            [str(lv) for lv in unique_lvls],
+        "group_means":       group_means,
+        "group_sems":        group_sems,
+        "participant_means": part_means,
+    }
+
+
 def _collect_discovery_cells(emp_data: dict) -> list:
     """Return list of cell dicts, one per (dataset × top-K factor)."""
     cells = []
     datasets = emp_data.get("datasets", {})
     for ds_name, ds in datasets.items():
         display_name = ds.get("display_name", ds_name)
+        config_path  = ds.get("config_path", "")
         null_formula = ds.get("null_formula", "")
+
         discovery_runs = ds.get("discovery_runs", [])
         if not discovery_runs:
             continue
@@ -311,24 +521,33 @@ def _collect_discovery_cells(emp_data: dict) -> list:
             reverse=True,
         )
         for factor in discovered_sorted[:TOP_K_PER_DATASET]:
+            pld = factor.get("participant_level_data")
+            if not pld and config_path:
+                # participant_level_data was not stored (trial_index bug); recompute now
+                meta = _load_cfg_meta(config_path)
+                if not null_formula:
+                    null_formula = meta.get("null_formula", "")
+                outcome_var = meta.get("outcome_variable", "")
+                out_label   = _outcome_label(outcome_var, null_formula) if outcome_var else ""
+                pld = _compute_pld_for_plot(factor, meta, out_label)
+
             cells.append({
                 "ds_name":      ds_name,
                 "display_name": display_name,
                 "null_formula": null_formula,
-                "factor":       factor,
+                "factor":       {**factor, "participant_level_data": pld},
             })
     return cells
 
 
-def _plot_discovery_cell(fig, outer_cell, cell: dict):
-    """Render one discovery panel: effect plot (top) + code inset (bottom)."""
+def _plot_discovery_cell(fig, ax_eff, ax_code, cell: dict):
+    """Render one discovery row: effect plot (left) + code inset (right)."""
     disc = cell["factor"]
     display_name = cell["display_name"]
     null_formula = cell.get("null_formula", "")
 
     pl_data = disc.get("participant_level_data") or {}
-    raw_outcome = pl_data.get("outcome_label", "")
-    outcome_label = _outcome_label(raw_outcome, null_formula)
+    outcome_label = pl_data.get("outcome_label", "")
     levels = pl_data.get("levels", [])
     group_means = np.array(pl_data.get("group_means", []))
     group_sems  = np.array(pl_data.get("group_sems", []))
@@ -337,28 +556,18 @@ def _plot_discovery_cell(fig, outer_cell, cell: dict):
     n_levels = len(levels)
     x_pos = np.arange(n_levels, dtype=float)
 
-    # Determine title: llm_name if available, else display name from dict
     factor_name_raw = disc.get("name", "")
     llm_name = disc.get("llm_name", "")
     title_str = llm_name if llm_name else _factor_display(factor_name_raw)
 
-    inner = gridspec.GridSpecFromSubplotSpec(
-        2, 1, subplot_spec=outer_cell,
-        height_ratios=[3.5, 1.8], hspace=0.28
-    )
-    ax_eff  = fig.add_subplot(inner[0])
-    ax_code = fig.add_subplot(inner[1])
+    # ── Effect plot (left panel) ───────────────────────────────────────────────
+    rng = np.random.RandomState(77)
 
-    # ── Effect plot ───────────────────────────────────────────────────────────
-    rng = np.random.default_rng(77)
-
-    # Flatten all participant data for y-limit computation
     all_pts = []
     for lvl in levels:
         pts = participant_means.get(lvl, [])
         all_pts.extend(pts)
 
-    # Scatter participant dots per level
     for xi, lvl in zip(x_pos, levels):
         pts = np.array(participant_means.get(lvl, []), dtype=float)
         if len(pts) > 0:
@@ -367,14 +576,12 @@ def _plot_discovery_cell(fig, outer_cell, cell: dict):
                            s=5, color="#AAAAAA", alpha=0.40,
                            linewidths=0, zorder=1)
 
-    # Group means ± SEM
     if len(group_means) == n_levels and n_levels > 0:
         ax_eff.errorbar(x_pos, group_means, yerr=group_sems,
                         fmt="o", color=style.NOVEL_COLOR,
                         markersize=6.5, markeredgewidth=0,
                         lw=1.6, capsize=3.5, capthick=1.2, zorder=3)
 
-    # Y limits: percentile 2/98 of participant data ± margin
     if all_pts:
         all_arr = np.array(all_pts, dtype=float)
         lo = np.percentile(all_arr, 2)
@@ -388,13 +595,11 @@ def _plot_discovery_cell(fig, outer_cell, cell: dict):
     if n_levels > 0:
         ax_eff.set_xlim(-0.65, n_levels - 0.35)
 
-    # Title (factor name) inside the padded top region
     ax_eff.text(0.5, 0.97, title_str,
                 transform=ax_eff.transAxes,
                 ha="center", va="top",
                 fontsize=style.FS_LABEL, fontweight="bold")
 
-    # Italic subtitle: dataset display name
     ax_eff.text(0.5, 0.88, display_name,
                 transform=ax_eff.transAxes,
                 ha="center", va="top",
@@ -402,36 +607,32 @@ def _plot_discovery_cell(fig, outer_cell, cell: dict):
 
     style.despine(ax_eff)
 
-    # ── Code inset ────────────────────────────────────────────────────────────
+    # ── Code inset (right panel) ───────────────────────────────────────────────
     ax_code.set_xlim(0, 1)
     ax_code.set_ylim(0, 1)
     ax_code.axis("off")
 
-    # Gray background rectangle
     ax_code.add_patch(Rectangle(
         (0, 0), 1, 1,
         facecolor=CODE_BG, edgecolor=CODE_EDG,
         lw=0.5, transform=ax_code.transAxes, clip_on=False
     ))
 
-    # Header
-    ax_code.text(0.04, 0.94, "compute_factor()",
+    ax_code.text(0.04, 0.96, "compute_factor()",
                  transform=ax_code.transAxes, ha="left", va="top",
                  fontsize=style.FS_CODE, color="#999999",
                  fontfamily="monospace", clip_on=True)
 
-    # Code body
     compute_code = disc.get("compute_code", "")
-    ax_code.text(0.04, 0.78, compute_code,
+    ax_code.text(0.04, 0.86, compute_code,
                  transform=ax_code.transAxes, ha="left", va="top",
-                 fontsize=style.FS_CODE, fontfamily="monospace",
-                 color="#1A1A1A", linespacing=1.65, clip_on=True)
+                 fontsize=4.0, fontfamily="monospace",
+                 color="#1A1A1A", linespacing=1.4, clip_on=True)
 
-    # ΔLL annotation below the code inset
     delta_ll = disc.get("validation_improvement", float("nan"))
-    ax_code.text(0.025, -0.07,
-                 f"ΔLL = {delta_ll:.1f}  ·  held-out set",
-                 transform=ax_code.transAxes, ha="left", va="top",
+    ax_code.text(0.04, 0.04,
+                 f"ΔLL = {delta_ll:.2f}  ·  held-out set",
+                 transform=ax_code.transAxes, ha="left", va="bottom",
                  fontsize=style.FS_ANNOT, color="#444444", clip_on=False)
 
 
@@ -442,22 +643,21 @@ def make_figure4(emp_data: dict, out_dir: str, show: bool):
         return
 
     total_cells = len(cells)
-    N_COLS = total_cells  # one column per (dataset × top-K)
-    N_ROWS = math.ceil(total_cells / N_COLS)
+    row_height  = 2.5   # inches per dataset row
 
-    fig = plt.figure(figsize=(style.W2, 5.5 * N_ROWS))
-    outer_gs = gridspec.GridSpec(N_ROWS, N_COLS, figure=fig,
-                                 hspace=0.55, wspace=0.38)
+    fig = plt.figure(figsize=(style.W2, row_height * total_cells))
+    gs  = gridspec.GridSpec(
+        total_cells, 2,
+        figure=fig,
+        width_ratios=[0.75, 1.25],
+        hspace=0.45,
+        wspace=0.30,
+    )
 
     for idx, cell in enumerate(cells):
-        row_i = idx // N_COLS
-        col_i = idx % N_COLS
-        _plot_discovery_cell(fig, outer_gs[row_i, col_i], cell)
-
-    # Hide unused cells
-    for idx in range(total_cells, N_ROWS * N_COLS):
-        ax_empty = fig.add_subplot(outer_gs[idx // N_COLS, idx % N_COLS])
-        ax_empty.axis("off")
+        ax_eff  = fig.add_subplot(gs[idx, 0])
+        ax_code = fig.add_subplot(gs[idx, 1])
+        _plot_discovery_cell(fig, ax_eff, ax_code, cell)
 
     os.makedirs(out_dir, exist_ok=True)
     fig.savefig(os.path.join(out_dir, "figure4.png"))
