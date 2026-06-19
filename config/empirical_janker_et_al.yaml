@@ -4,7 +4,8 @@ benchmark:
 
 statistical:
   outcome_type: "continuous"    # "binary" → logistic regression | "continuous" → linear regression
-
+  mixed_effects: true
+  
 dataset:
   path: "data/empirical/janker_et_al.csv"
   participant_id_column: "participant_id"

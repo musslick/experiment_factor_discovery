@@ -11,19 +11,19 @@
 datasets:
   - stroop_congruency
   - janker
-  - digit_task_switching
+  # - digit_task_switching
   - flanker_congruency
-  - grange_n2_task
-  - hirsch_dual_task
-  - brooks_prospect_theory
-  - strittmatter
+  # - hirsch_dual_task
+  # - brooks_prospect_theory
+  # - strittmatter
   - weber_with_rewards
   - weber_without_rewards
+  - grange_n2_task
 
 n_benchmark_runs: 0
 n_discovery_runs: 1
 base_seed: 0
-output_dir: results/aggregated
+output_dir: results/empirical
 output_name: empirical_results.json
 
 # ── Benchmark phase defaults (run_single_benchmark) ──────────────────────────
@@ -34,7 +34,7 @@ benchmark_shared:
     output_dir: "results"
 
   discovery:
-    n_rounds: 5
+    n_rounds: 8
     max_search_iterations: 2
 
     max_synthesis_retries: 2
@@ -121,7 +121,7 @@ discovery_shared:
     output_dir: "results"
 
   discovery:
-    n_rounds: 3
+    n_rounds: 10
     max_search_iterations: 2
 
     max_synthesis_retries: 2
@@ -158,10 +158,10 @@ discovery_shared:
 
     seeding_strategy:
       type: "mixed"
-      n_candidates: 40
+      n_candidates: 50
       components:
       - type: "llm"
-        n_candidates: 15
+        n_candidates: 25
       - type: "random"
         n_candidates: 25
         template_bias: "uniform"
@@ -172,7 +172,7 @@ discovery_shared:
 
     evolution_strategy:
       type: "llm_genetic"
-      n_candidates: 5
+      n_candidates: 10
       top_k: 3
       n_elite: 1
       n_tournament_parents: 3
@@ -193,7 +193,7 @@ discovery_shared:
 
   statistical:
     min_level_count: 5
-    mixed_effects: false  # basic GLM only; outcome_type set per dataset
+    mixed_effects: true  # basic GLM only; outcome_type set per dataset
 
   evaluation:
     bijection_threshold: 0.95
