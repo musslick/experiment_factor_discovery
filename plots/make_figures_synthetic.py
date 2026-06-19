@@ -32,11 +32,11 @@ FACTOR_DISPLAY_NAMES = {
     # Stroop-Simon
     "word_color_congruency":              "word-color congruency",
     "location_response_congruency":       "location-response congruency",
-    "congruency_previous_trial":          "congruency (prev. trial)",
+    "congruency_previous_trial":          "previous-trial congruency",
     "response_transition":                "response transition",
     # RDK Task-Switching
     "task_transition":                    "task transition",
-    "current_stimulus_difficulty":        "stimulus difficulty",
+    "current_stimulus_difficulty":        "current stimulus difficulty",
     "past_stimulus_difficulty":           "past stimulus difficulty",
     "n2_task_inhibition":                 "n-2 task inhibition",
     # Prospect Theory
@@ -55,11 +55,11 @@ FACTOR_FORMULAS = {
     # Response Interference (Stroop-Simon)
     "word_color_congruency":              "word = color",
     "location_response_congruency":       "location = response",
-    "congruency_previous_trial":          "wcc[n−1]",
+    "congruency_previous_trial":          "word[n−1] = color[n−1]",
     "response_transition":                "response[n] = response[n−1]",
     # Task Switching (RDK)
     "task_transition":                    "task[n] = task[n−1]",
-    "current_stimulus_difficulty":        "1 − coherence[n]",
+    "current_stimulus_difficulty":        "1 − coh_{task[n]}[n]",
     "past_stimulus_difficulty":           "1 − coherence[n−1]",
     "n2_task_inhibition":                 "task[n] = task[n−2]",
     # Decision Making (Prospect Theory)
@@ -70,6 +70,9 @@ FACTOR_FORMULAS = {
     "previous_expected_value_difference": "EV_diff[n−1]",
     "value_difference_transition":        "sign(EV_diff[n]) = sign(EV_diff[n−1])",
 }
+
+# Factors to omit from Panel B entirely
+EXCLUDE_FACTORS = {"previous_expected_value_difference", "value_difference_transition", "gain_difference"}
 
 # Display-name ordering for benchmarks (detected by substring match on display_name)
 BENCHMARK_ORDER_KEYS = ["Stroop", "RDK", "Prospect"]
@@ -240,6 +243,8 @@ def _build_factor_rows(benchmark_order, benchmarks_dict):
         xlabel = _benchmark_xlabel(bk, bdata)
         for factor_info in bdata.get("ground_truth_factors", []):
             fname = factor_info["name"]
+            if fname in EXCLUDE_FACTORS:
+                continue
             mean, se = _factor_recovery(fname, factor_info, runs)
             rows.append({
                 "name":    fname,
@@ -358,13 +363,14 @@ def make_figure(results_path, output_dir, show=True):
     ax_c.set_xticklabels(["Discrete", "Continuous"], fontsize=style.FS_TICK)
     ax_c.set_yticks([0, 1])
     ax_c.set_yticklabels(["Within-trial", "Across-trial"], fontsize=style.FS_TICK)
+    ax_c.set_title("Recovery score  (recall  |  |Spearman ρ|)", fontsize=style.FS_LABEL, pad=6)
     ax_c.set_xlabel("Factor class", fontsize=style.FS_LABEL, labelpad=4)
     ax_c.set_ylabel("Factor scope", fontsize=style.FS_LABEL, labelpad=4)
     ax_c.tick_params(length=0)
     for sp in ax_c.spines.values():
         sp.set_visible(False)
 
-    style.panel_label(ax_c, "C", x=-0.16)
+    style.panel_label(ax_c, "C", x=-0.28, y=1.18)
 
     # ═════════════════════════════════════════════════════════════════════════
     # Panel B — Per-factor level / correlation recovery
@@ -383,18 +389,16 @@ def make_figure(results_path, output_dir, show=True):
         ax_b.barh(y_positions[i], row["mean"], height=bar_height,
                   color=color, alpha=0.90, zorder=3)
 
-        if is_cont:
-            ax_b.barh(y_positions[i], row["mean"], height=bar_height,
-                      color="none", hatch=style.CONTINUOUS_HATCH,
-                      edgecolor=color, linewidth=0.0, zorder=4)
-
         ax_b.errorbar(row["mean"], y_positions[i], xerr=row["se"], fmt="none",
                       color="#444444", lw=0.8, capsize=2.5, capthick=0.8,
                       zorder=5)
 
-    # Y-axis: factor labels
+    # Y-axis: factor labels colored to match their bars
     ax_b.set_yticks(y_positions)
     ax_b.set_yticklabels([r["label"] for r in factor_rows], fontsize=style.FS_ANNOT)
+    for tick, row in zip(ax_b.get_yticklabels(), factor_rows):
+        color_key = f"{row['type']}_{row['class']}"
+        tick.set_color(style.FACTOR_COLORS.get(color_key, "#999999"))
     ax_b.invert_yaxis()
 
     # Formula annotations below each factor name
