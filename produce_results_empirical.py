@@ -348,6 +348,7 @@ def _collect_discovery_run(
         compute_code = f.get("compute_code", "")
         sweetpea_code = f.get("sweetpea_code", "")
         validation_improvement = float(f.get("validation_improvement", 0.0))
+        proposer = f.get("proposer", "llm")
 
         # Retrieve llm_name / llm_interpretation from the effects list (main effects)
         llm_name = ""
@@ -372,6 +373,7 @@ def _collect_discovery_run(
             "compute_code": compute_code,
             "sweetpea_code": sweetpea_code,
             "validation_improvement": validation_improvement,
+            "proposer": proposer,
             "llm_name": llm_name,
             "llm_interpretation": llm_interpretation,
             "participant_level_data": pld,

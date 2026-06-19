@@ -95,14 +95,22 @@ def _load_round_logs(report_dir: Path) -> List[Dict[str, Any]]:
         cumulative_calls += n_candidates_this_round
 
         winner = data.get("winner") or {}
+        proposer_counts: Dict[str, int] = {}
+        for sc in all_scored:
+            p = sc.get("proposer", "llm")
+            proposer_counts[p] = proposer_counts.get(p, 0) + 1
         logs.append({
             "round": data.get("round", len(logs) + 1),
             "accepted": bool(data.get("accepted", False)),
             "n_scored": n_scored,
             "n_hard_rejected": n_hard_rejected,
             "winner_cv_mean": float(winner.get("cv_score_mean", 0.0)) if winner else 0.0,
+            "winner_proposer": winner.get("proposer", "llm") if winner else None,
             "validation_improvement": float(data.get("validation_improvement", 0.0)),
             "cumulative_synthesis_calls": cumulative_calls,
+            "n_llm_scored": proposer_counts.get("llm", 0),
+            "n_random_seeder_scored": proposer_counts.get("random_seeder", 0),
+            "n_random_lookup_seeder_scored": proposer_counts.get("random_lookup_seeder", 0),
         })
     return logs
 

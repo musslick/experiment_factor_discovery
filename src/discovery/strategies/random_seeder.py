@@ -669,6 +669,7 @@ class RandomSeeder(SeedingStrategy):
 
         for c in selected:
             c.round_num = context.round_num
+            c.proposer = "random_seeder"
 
         return selected[:context.n_to_generate]
 
@@ -800,6 +801,7 @@ class RandomLookupSeeder(SeedingStrategy):
                     predicate_status="pending",
                 )
 
+            c.proposer = "random_lookup_seeder"
             candidates.append(c)
 
         return candidates[: context.n_to_generate]

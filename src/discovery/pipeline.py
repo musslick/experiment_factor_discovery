@@ -71,6 +71,7 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "predicate_status": w.candidate.predicate_status,
             "sweetpea_code":    w.candidate.sweetpea_code,
             "compute_code":     w.candidate.compute_code,
+            "proposer":         w.candidate.proposer,
         }
 
     for sc in result.all_scored:
@@ -88,6 +89,7 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "predicate_status": sc.candidate.predicate_status,
             "sweetpea_code":    sc.candidate.sweetpea_code,
             "compute_code":     sc.candidate.compute_code,
+            "proposer":         sc.candidate.proposer,
         })
 
     for c in result.hard_rejected_in_round:
@@ -99,6 +101,7 @@ def _save_round_log(result: RoundResult, output_dir: str) -> None:
             "predicate_status": c.predicate_status,
             "sweetpea_code":    c.sweetpea_code,
             "compute_code":     c.compute_code,
+            "proposer":         c.proposer,
         })
 
     log_path = Path(output_dir) / f"round_{result.round_num:02d}_candidates.json"

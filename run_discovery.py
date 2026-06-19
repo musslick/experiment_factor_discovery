@@ -183,6 +183,7 @@ def _build_output(
             "sweetpea_code": f.candidate.sweetpea_code or "",
             "compute_code": f.candidate.compute_code or "",
             "validation_improvement": round(f.validation_improvement or 0.0, 4),
+            "proposer": f.candidate.proposer,
         })
 
     existing_factors = [bf.name for bf in cfg.base_factors]
