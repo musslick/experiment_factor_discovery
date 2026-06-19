@@ -161,6 +161,15 @@ def _gen_t8_min(f: str) -> str:
         """)
 
 
+def _gen_disc_lag(f: str) -> str:
+    """Return the previous trial's value of a discrete factor (width=2 window)."""
+    return textwrap.dedent(f"""\
+        def compute_factor(window: list) -> str:
+            v = window[0]['{f}']
+            return str(v) if v is not None else None
+        """)
+
+
 def _gen_t9_within_trial(depends_on: List[str], lookup: dict) -> str:
     """Generate an if-elif chain for a within-trial random partition."""
     lines = ["def compute_factor(trial: dict) -> str:"]
@@ -212,8 +221,10 @@ def _gen_t9_window(depends_on: List[str], window_width: int, lookup: dict) -> st
 
 class FactorTemplateLibrary:
     """
-    Enumerates all valid CandidateFactor stubs from templates T1-T8.
-    Each stub has compute_code set so no LLM synthesis is needed.
+    Enumerates all valid CandidateFactor stubs from templates T1-T8 plus
+    templates over already-discovered factors (T_disc_lag, T3/T5/T6/T8 on
+    discovered parents). Each stub has compute_code set so no LLM synthesis
+    is needed.
     """
 
     def enumerate(
@@ -245,6 +256,31 @@ class FactorTemplateLibrary:
             candidates.extend(self._t7(obs, continuous_obs, context.round_num))
         if allow_win and allow_cont and continuous_obs:
             candidates.extend(self._t8(continuous_obs, context.max_window_width, context.round_num))
+
+        # Templates over already-discovered factors
+        if context.discovered_factors:
+            disc_discovered = [
+                {"name": d.column_name, "dtype": "categorical", "levels": d.candidate.levels}
+                for d in context.discovered_factors
+                if d.candidate.factor_class == "discrete"
+            ]
+            cont_discovered = [
+                {"name": d.column_name, "dtype": "continuous", "levels": []}
+                for d in context.discovered_factors
+                if d.candidate.factor_class == "continuous"
+            ]
+            if allow_win and allow_disc and disc_discovered:
+                # Lag: previous trial's value of each discovered discrete factor
+                candidates.extend(self._t_disc_lag(disc_discovered, context.round_num))
+                # Repeat/switch and streak over discovered discrete factors
+                candidates.extend(self._t3(disc_discovered, context.max_window_width, context.round_num))
+                candidates.extend(self._t5(disc_discovered, context.max_window_width, context.round_num))
+            if allow_win and allow_cont and disc_discovered:
+                # Running proportion of each level of discovered discrete factors
+                candidates.extend(self._t6(disc_discovered, context.max_window_width, context.round_num))
+            if allow_win and allow_cont and cont_discovered:
+                # Lag/mean/delta/max/min of discovered continuous factors
+                candidates.extend(self._t8(cont_discovered, context.max_window_width, context.round_num))
 
         return candidates
 
@@ -410,6 +446,28 @@ class FactorTemplateLibrary:
                     compute_code=_gen_t5(f["name"]),
                     predicate_status="pending",
                 ))
+        return out
+
+    def _t_disc_lag(self, discrete_factors: List[dict], round_num: int) -> List[CandidateFactor]:
+        """Lag template: return the previous trial's value of a discrete factor (width=2)."""
+        out = []
+        for f in discrete_factors:
+            levels = f.get("levels", [])
+            if not levels:
+                continue
+            name = f"{f['name']}_prev"
+            out.append(CandidateFactor(
+                name=name,
+                description=f"Value of {f['name']} on the previous trial",
+                factor_type="window",
+                factor_class="discrete",
+                window_width=2,
+                levels=list(levels),
+                depends_on=[f["name"]],
+                round_num=round_num,
+                compute_code=_gen_disc_lag(f["name"]),
+                predicate_status="pending",
+            ))
         return out
 
     def _t6(self, discrete_obs: List[dict], max_width: int, round_num: int) -> List[CandidateFactor]:
