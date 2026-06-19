@@ -7,8 +7,8 @@ dataset:
   participant_id_column: "subjectid"
   n_participants: 77
   outcome_variable: "latency"
-  null_formula: "np.log(latency) ~ C(task) + C(motion_coherence) + C(orientation_coherence)"
-  full_formula: "np.log(latency) ~ C(task) + C(motion_coherence) + C(orientation_coherence) + C(current_stimulus_difficulty) + C(past_stimulus_difficulty) + C(task_transition)"
+  null_formula: "np.log(latency) ~ C(task)"
+  full_formula: "np.log(latency) ~ C(task) + current_stimulus_difficulty"
   task_context: |
     This is a random-object kinematogram (ROK) task-switching paradigm from Strittmatter et al.
     On each trial, a stimulus of moving arrows is shown that varies in motion direction and
@@ -16,9 +16,8 @@ dataset:
       motion      : is the net motion direction up or down?
       orientation : do the arrows predominantly point up or down?
     Participants must respond based on the cued dimension only and ignore the other.
-    The correct response is fully determined by the task cue and the relevant stimulus feature.
-    Motion and orientation coherence values (0–1) reflect how strongly the stimulus is biased
-    toward one of the two levels on each dimension; higher coherence means easier discrimination.
+    The signal for each stimulus is determined by the motion and color coherence respecitvely; higher coherence means easier discrimination.
+    The correct response is fully determined by the task cue and the relevant stimulus feature (motion or orientation).
     Accuracy (correct / incorrect) and reaction time are the outcomes to be predicted.
   base_factors:
     - {name: task,                  dtype: categorical, levels: [motion, orientation]}
@@ -34,12 +33,13 @@ dataset:
     - name: "current_stimulus_difficulty"
       type: "within_trial"
       factor_class: "continuous"
-    - name: "past_stimulus_difficulty"
-      type: "transition"
-      factor_class: "continuous"
-    - name: "response_repetition"
-      type: "transition"
-      levels: ["switch", "repeat"]
+    # # removed the factors below as they are not included in the statistical model
+    # - name: "past_stimulus_difficulty"
+    #   type: "transition"
+    #   factor_class: "continuous"
+    # - name: "response_repetition"
+    #   type: "transition"
+    #   levels: ["switch", "repeat"]
 
 discovery:
   allowed_factor_classes: ["continuous", "discrete"]
@@ -47,4 +47,4 @@ discovery:
 
 statistical:
   outcome_type: "continuous"  # latency → linear regression (GLM)
-  mixed_effects: false
+  mixed_effects: true

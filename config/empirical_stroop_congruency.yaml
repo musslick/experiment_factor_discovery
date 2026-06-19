@@ -6,10 +6,10 @@ dataset:
   path: "data/empirical/stroop_data_with_congruency.csv"
   participant_id_column: "subjectid"
   n_participants: 466
-  outcome_variable: "latency"
+  outcome_variable: "accuracy"
   extra_columns: ["trial", "blocknum", "blockcode"]
-  null_formula: "np.log(latency) ~ C(color) + C(word)"
-  full_formula: "np.log(latency) ~ C(color) + C(word) + C(congruency) + C(response_repetition)"
+  null_formula: "accuracy ~ 1"
+  full_formula: "accuracy ~ C(congruency) + C(response_repetition)"
   task_context: |
     This is a Stroop task. On each trial a participant sees a colour word (e.g. "red",
     "blue", "green", "black") printed in coloured ink and must indicate the colour of
@@ -36,7 +36,7 @@ statistical:
   # For latency: the "np.log(...)" transform in the null_formula LHS is preserved automatically.
   # For accuracy: the LHS is replaced with the bare column name (no transform), and the
   #   logistic model family is selected by type: "binary".
-  outcome_type: "continuous"  # latency → linear regression (GLM)
-  mixed_effects: false
+  outcome_type: "binary"  # latency → linear regression (GLM)
+  mixed_effects: true
 
 # No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.

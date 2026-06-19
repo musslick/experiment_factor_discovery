@@ -31,14 +31,15 @@ dataset:
 
   base_factors:
     - {name: task, dtype: categorical, levels: [1.0, 2.0, 3.0]}
+    - {name: reward, dtype: categorical, levels: [1, 0]}
   hidden_factors:               # columns present in the CSV but withheld from the pipeline
     - name: "tasksequence"  # model-facing name (used in formulas and evaluation)
       #column: "my_hidden_factor"  # actual CSV column name (omit if same as name)
       type: "window"      # "within_trial" or "window"
       levels: ["ABA", "CBA"]
-  extra_columns: ["trial", "reward"]   # columns to keep in the dataframe but not model
+  extra_columns: ["trial"]   # columns to keep in the dataframe but not model
   null_formula: "np.log(latency) ~ C(task)"   # auto-built if omitted
-  full_formula: "np.log(latency) ~ C(task) + C(tasksequence)"  # auto-built if omitted; should include all base and hidden factors
+  full_formula: "np.log(latency) ~ C(task) + C(tasksequence) + C(reward)"  # auto-built if omitted; should include all base and hidden factors
 
 discovery:
   sandbox_timeout_seconds: 30   # increase for large datasets (>50k rows)

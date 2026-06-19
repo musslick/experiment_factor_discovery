@@ -44,4 +44,4 @@ statistical:
   # For accuracy: the LHS is replaced with the bare column name (no transform), and the
   #   logistic model family is selected by type: "binary".
   outcome_type: "continuous"  # latency → linear regression (GLM)
-  mixed_effects: false
+  mixed_effects: true

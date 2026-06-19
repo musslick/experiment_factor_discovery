@@ -18,6 +18,7 @@ dataset:
     - {name: stimulus, dtype: categorical, levels: [topLeft, topRight, bottomLeft, bottomRight]}
     - {name: task,  dtype: categorical, levels: [horizontal, vertical, diagonal]}
     - {name: correctResponse,  dtype: categorical, levels: [num_1, num_2, num_3, num_4]}
+    - {name: rci,  dtype: categorical, levels: [short, long]}
   hidden_factors:
     - name: "task transition sequence"
       type: "window"
@@ -31,10 +32,6 @@ dataset:
       type: "window"
       levels: ["switch", "repeat"]
       column: "task_transition"
-    - name: "response cue interval"
-      type: "within_trial"
-      levels: ["short", "long"]
-      column: "rci"
 
 
 discovery:
