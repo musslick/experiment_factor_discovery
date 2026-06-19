@@ -17,17 +17,24 @@ dataset:
   base_factors:
     - {name: stimulus, dtype: categorical, levels: [topLeft, topRight, bottomLeft, bottomRight]}
     - {name: task,  dtype: categorical, levels: [horizontal, vertical, diagonal]}
+    - {name: correctResponse,  dtype: categorical, levels: [num_1, num_2, num_3, num_4]}
   hidden_factors:
-    - name: "sequence"
+    - name: "task transition sequence"
       type: "window"
       levels: ["null", "CBA", "ABA"]
-    - name: "Response_Repitition"
+      column: "sequence"
+    - name: "response_repetition"
       type: "window"
-      levels: ["switch", "repitiion"]
+      levels: ["switch", "repetition"]
       column: "respRep"
     - name: "task_transition"
       type: "window"
       levels: ["switch", "repeat"]
+      column: "task_transition"
+    - name: "response cue interval"
+      type: "within_trial"
+      levels: ["short", "long"]
+      column: "rci"
 
 
 discovery:
@@ -41,6 +48,6 @@ statistical:
   # For accuracy: the LHS is replaced with the bare column name (no transform), and the
   #   logistic model family is selected by type: "binary".
   outcome_type: "continuous"  # latency → linear regression (GLM)
-  mixed_effects: false
+  mixed_effects: true
 
 # No evaluation section needed: ground_truth_factors is auto-built from hidden_factors above.
