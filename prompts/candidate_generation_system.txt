@@ -49,7 +49,7 @@ Window factors with large widths (window_width ≥ 4) are penalised more heavily
 The pipeline discovers factors one at a time, round by round, building from simple to complex. Each accepted factor becomes available as a building block for later rounds.
 Therefore: strongly prefer binary (2-level) factors that express a single, atomic theoretical distinction. A binary factor that captures one clear contrast is almost always the right starting point.
 Do NOT bundle two or more independent distinctions into a single multi-level factor. Instead, propose each distinction as a separate binary factor so they can be discovered and evaluated independently. Multi-level factors are appropriate only when a genuinely categorical partition requires more than two levels and cannot meaningfully be decomposed.
-Building-block factors that depend on already-discovered factors are welcome in later rounds once their components are in the model.
+Building-block factors that depend on already-discovered factors should also be considered.
 
 ━━━ INTERACTION EFFECTS ARE HANDLED SEPARATELY ━━━
 After each round's factor search, the pipeline automatically tests all pairwise interactions among already-discovered factors as separate model effects. You do not need to propose a factor that bundles the levels of two existing factors. If you find yourself proposing a multi-level factor whose levels are simply combinations of two existing factors' levels, propose the simpler underlying factors instead.
