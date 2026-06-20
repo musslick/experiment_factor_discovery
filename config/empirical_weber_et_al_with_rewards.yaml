@@ -1,11 +1,11 @@
 benchmark:
-  name: "task_switching_weber_et_al_without_rewards"
+  name: "task_switching_weber_et_al_with_rewards"
   mode: "empirical_benchmark"
 
 dataset:
-  path: "data/empirical/weber_et_al_without_reward.csv"
-  participant_id_column: "subjectid"   # column name for participant ID in the CSV
-  outcome_variable: "latency"          # binary 0/1 column
+  path: "data/empirical/weber_et_al.csv"
+  participant_id_column: "subject"   # column name for participant ID in the CSV
+  outcome_variable: "rt"          # binary 0/1 column
   task_context: |
     Participants perform either in a digit-categorization task or in a 
     face categorization task.
@@ -14,17 +14,17 @@ dataset:
     categorizing the digit as smaller or larger than five 
     (size task), odd or even (parity task), or situated in the inner 
     (digits 3, 4, 6, 7) or outer (digits 1, 2, 8, 9) area of a mental number 
-    line ranging from 1 to 9 (interval task). The task for each upcoming trial 
-    is indicated by a colored frame presented centrally on the screen, which is 
+    line ranging from 1 to 9 (interval task). 
+    In the face categorization task, participants are presented with one of 8 faces 
+    per trial and have to categorize them by young/old, female/male, or bright/dark 
+    eye color.
+    The task for each upcoming trial is indicated by a colored frame presented centrally on the screen, which is 
     then followed by the stimulus. A red frame indicated the size task, 
     blue the parity task, and yellow the interval task. Participants respond to 
     the stimulus by pressing "Y" or "M" on a QWERTZ keyboard. Participants are 
     instructed to use their left and right index fingers for responding.
     A reminder summarizing the individual response mappings for the three tasks 
     is placed below the screen and remains visible throughout the experiment.
-    In the face categorization task, participants are presented with one of 8 faces 
-    per trial and have to categorize them by young/old, female/male, or bright/dark 
-    eye color.
     Participants can achieve points for fast and correct performance. The three participants
     with the highest points receive a gift card.
 
@@ -32,14 +32,16 @@ dataset:
   base_factors:
     - {name: task, dtype: categorical, levels: [1.0, 2.0, 3.0]}
     - {name: reward, dtype: categorical, levels: [1, 0]}
+    - {name: phase, dtype: categorical, levels: [baseline_phase, reward_phase]}  
+    - {name: motivation_group, dtype: categorical, levels: [control_group, reward_group]}
   hidden_factors:               # columns present in the CSV but withheld from the pipeline
     - name: "tasksequence"  # model-facing name (used in formulas and evaluation)
       #column: "my_hidden_factor"  # actual CSV column name (omit if same as name)
       type: "window"      # "within_trial" or "window"
       levels: ["ABA", "CBA"]
-  extra_columns: ["trial"]   # columns to keep in the dataframe but not model
-  null_formula: "np.log(latency) ~ C(task)"   # auto-built if omitted
-  full_formula: "np.log(latency) ~ C(task) + C(tasksequence) + C(reward)"  # auto-built if omitted; should include all base and hidden factors
+  extra_columns: ["trialnr"]   # columns to keep in the dataframe but not model
+  null_formula: "np.log(rt) ~ C(task) + C(reward) + C(phase) + C(motivation_group)"   # auto-built if omitted
+  full_formula: "np.log(rt) ~ C(task) + C(reward) + C(phase) + C(motivation_group) + C(tasksequence)"  # auto-built if omitted; should include all base and hidden factors
 
 discovery:
   sandbox_timeout_seconds: 30   # increase for large datasets (>50k rows)
