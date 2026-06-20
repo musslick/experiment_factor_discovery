@@ -15,7 +15,8 @@ benchmarks:
   # - config/empirical_stroop_congruency.yaml
   # - config/empirical_janker_et_al.yaml
   # - config/empirical_digit_task_switiching.yaml
-  - config/empirical_strittmatter_et_al.yaml
+  # - config/empirical_strittmatter_et_al.yaml
+  - config/empirical_weber_et_al_with_rewards.yaml
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 benchmark:
