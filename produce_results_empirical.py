@@ -21,6 +21,7 @@ import argparse
 import json
 import math
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -479,9 +480,13 @@ def main() -> None:
     n_benchmark_runs = args.n_benchmark_runs or prod_cfg.get("n_benchmark_runs", 10)
     n_discovery_runs = args.n_discovery_runs or prod_cfg.get("n_discovery_runs", 3)
     base_seed = args.base_seed if args.base_seed is not None else prod_cfg.get("base_seed", 0)
-    output_dir = Path(args.output_dir or prod_cfg.get("output_dir", "results/aggregated"))
+    output_dir = Path(args.output_dir or prod_cfg.get("output_dir", "results/empirical"))
     output_name = args.output_name or prod_cfg.get("output_name", "empirical_results.json")
     output_path = output_dir / output_name
+
+    # Copy the produce config into the output directory for reproducibility.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(args.config, output_dir / Path(args.config).name)
 
     # Shared defaults for each phase, drawn from the produce config.
     # benchmark_shared: merged into each dataset config for run_single_benchmark calls.

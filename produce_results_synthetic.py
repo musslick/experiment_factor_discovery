@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -281,6 +282,10 @@ def main() -> None:
     output_name: str = args.output_name or yaml_cfg.get("output_name", "aggregated_results.json")
 
     output_path = Path(output_dir) / output_name
+
+    # Copy the produce config into the output directory for reproducibility.
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    shutil.copy(args.config, Path(output_dir) / Path(args.config).name)
 
     # Extract shared defaults for load_config(): everything in the produce YAML
     # except the produce-specific top-level keys.
