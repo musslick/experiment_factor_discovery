@@ -49,6 +49,10 @@ from src.analysis.model_comparison import (
     replace_formula_outcome,
     score_candidate_cv,
 )
+from src.discovery.candidate_generator import (
+    validate_candidate_dependencies,
+    validate_candidate_structure,
+)
 from src.discovery.contrast_searcher import generate_level_vs_rest_contrasts
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor, FactorRegistry
 from src.discovery.llm_client import LLMClient
@@ -372,8 +376,11 @@ def _build_context(
         disc_cfg.seeding_strategy.n_candidates if iteration == 0
         else disc_cfg.evolution_strategy.n_candidates
     )
+    outcome_names = {od.name for od in config.outcome_variable_defs}
     observable_factors_meta = []
     for bf in config.base_factors:
+        if bf.name in outcome_names:
+            continue
         entry: dict = {"name": bf.name, "dtype": bf.dtype, "levels": bf.levels}
         if observable_descriptions and bf.name in observable_descriptions:
             entry["description"] = observable_descriptions[bf.name]
@@ -399,10 +406,12 @@ def _build_context(
 def _build_obs_desc_str(
     observable_cols: List[str],
     descriptions: Optional[Dict[str, str]],
+    excluded_names: Optional[set] = None,
 ) -> str:
+    excluded = excluded_names or set()
     lines = []
     for name in observable_cols:
-        if name in ("participant_id", "block_index", "trial_index"):
+        if name in ("participant_id", "block_index", "trial_index") or name in excluded:
             continue
         desc = (descriptions or {}).get(name, "")
         lines.append(f"  {name}{': ' + desc if desc else ''}")
@@ -429,6 +438,11 @@ def run_within_round_search(
     disc_cfg = config.discovery
     llm_cfg  = config.llm
     stat_cfg = config.statistical
+    outcome_names = {od.name for od in config.outcome_variable_defs}
+    allowed_dependencies = (
+        {bf.name for bf in config.base_factors}
+        | {factor.column_name for factor in registry.discovered}
+    ) - outcome_names
 
     all_scored:             List[ScoredCandidate] = []
     hard_rejected_in_round: List[CandidateFactor] = []
@@ -461,6 +475,35 @@ def run_within_round_search(
                 print(f"    [skip] {candidate.name} — already scored this round")
                 continue
 
+            structure_valid, structure_error = validate_candidate_structure(
+                candidate=candidate,
+                existing_columns=search_df.columns,
+                allowed_factor_types=disc_cfg.allowed_factor_types,
+                allowed_factor_classes=disc_cfg.allowed_factor_classes,
+                max_window_width=disc_cfg.max_window_width,
+            )
+            if not structure_valid:
+                reason = f"invalid_candidate ({structure_error})"
+                registry.hard_reject(candidate, reason)
+                hard_rejected_in_round.append(candidate)
+                print(f"    [skip] {candidate.name}: {reason}")
+                continue
+
+            dependencies_valid, invalid_dependencies = validate_candidate_dependencies(
+                candidate, allowed_dependencies
+            )
+            if not dependencies_valid:
+                detail = (
+                    f"unknown_or_forbidden={invalid_dependencies}"
+                    if invalid_dependencies
+                    else "empty depends_on"
+                )
+                reason = f"invalid_dependencies ({detail})"
+                registry.hard_reject(candidate, reason)
+                hard_rejected_in_round.append(candidate)
+                print(f"    [skip] {candidate.name}: {reason}")
+                continue
+
             print(f"    → {candidate.name} ({candidate.factor_type}, {candidate.factor_class})", end=" ", flush=True)
 
             # --- predicate synthesis (fast path if code already set) ---
@@ -479,7 +522,9 @@ def run_within_round_search(
                     backend=disc_cfg.sandbox_backend,
                     max_tokens=llm_cfg.max_tokens_predicate,
                     observable_factor_descriptions=_build_obs_desc_str(
-                        observable_cols, observable_descriptions
+                        observable_cols,
+                        observable_descriptions,
+                        excluded_names=outcome_names,
                     ),
                 )
             if compute_code is None:

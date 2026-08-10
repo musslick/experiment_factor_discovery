@@ -7,10 +7,9 @@ Description:   <<description>>
 Levels:        <<levels>>
 Depends on:    <<depends_on>>
 
-## Available keys in each trial dict
+## Permitted factor definitions
+Only the keys named under Depends on are present in each trial dict.
 Observable factors:
-  participant_id : int
-  trial_index    : int
 <<observable_factor_descriptions>>
 
 <<discovered_section>>

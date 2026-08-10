@@ -9,8 +9,7 @@ Do NOT include any import statements — the harness already imports the allowed
 
 Signature for within_trial + discrete:
     def compute_factor(trial: dict) -> str:
-        # See user message for the full list of available trial dict keys.
-        # Plus any already-discovered factor column names listed in the user message.
+        # The trial dict contains only the keys listed under Depends on.
         # Return a string matching one of the declared levels.
 
 Signature for within_trial + continuous:
@@ -52,38 +51,9 @@ ContinuousFactor (for continuous factor_class) — archival only; semantics diff
     compute_factor is a deterministic post-hoc function applied to existing data.
     The sweetpea_code for continuous factors is illustrative only.
 
-━━━ WORKED EXAMPLES ━━━
-
-EXAMPLE 1 — within_trial + discrete: congruency (color == word)
-{
-  "compute_factor_code": "def compute_factor(trial):\n    if trial['color'] == trial['word']:\n        return 'congruent'\n    return 'incongruent'",
-  "sweetpea_code": "def con(color, word): return color == word\ndef inc(color, word): return color != word\n\ncongruency = Factor('congruency', [\n    DerivedLevel('congruent',   WithinTrial(con, [color, word])),\n    DerivedLevel('incongruent', WithinTrial(inc, [color, word])),\n])"
-}
-
-EXAMPLE 2 — window + discrete, width=2: task_transition (did the task repeat?)
-{
-  "compute_factor_code": "def compute_factor(window):\n    # window[0] = previous trial, window[-1] = current trial\n    if window[0]['task'] == window[-1]['task']:\n        return 'repeat'\n    return 'switch'",
-  "sweetpea_code": "def task_rep(task): return task[0] == task[-1]\ndef task_swi(task): return task[0] != task[-1]\n\ntask_transition = Factor('task_transition', [\n    DerivedLevel('repeat', Transition(task_rep, [task])),\n    DerivedLevel('switch', Transition(task_swi, [task])),\n])"
-}
-
-EXAMPLE 3 — window + discrete, width=2: congruency_sequence (4-level, depends on a discovered factor)
-{
-  "compute_factor_code": "def compute_factor(window):\n    pc = 'c' if window[0]['congruency'] == 'congruent' else 'i'\n    cc = 'c' if window[-1]['congruency'] == 'congruent' else 'i'\n    return pc + cc",
-  "sweetpea_code": "def seq_cc(con): return con[0] == 'congruent' and con[-1] == 'congruent'\ndef seq_ci(con): return con[0] == 'congruent' and con[-1] == 'incongruent'\ndef seq_ic(con): return con[0] == 'incongruent' and con[-1] == 'congruent'\ndef seq_ii(con): return con[0] == 'incongruent' and con[-1] == 'incongruent'\n\ncongruency_sequence = Factor('congruency_sequence', [\n    DerivedLevel('cc', Transition(seq_cc, [congruency])),\n    DerivedLevel('ci', Transition(seq_ci, [congruency])),\n    DerivedLevel('ic', Transition(seq_ic, [congruency])),\n    DerivedLevel('ii', Transition(seq_ii, [congruency])),\n])"
-}
-
-EXAMPLE 4 — window + discrete, width=3: congruency_2_back (was the trial 2 steps ago congruent?)
-{
-  "compute_factor_code": "def compute_factor(window):\n    # window[0] = 2 trials ago, window[-1] = current\n    if window[0]['color'] == window[0]['word']:\n        return 'congruent_2b'\n    return 'incongruent_2b'",
-  "sweetpea_code": "def two_back_con(con): return con[0] == 'congruent'\ndef two_back_inc(con): return con[0] == 'incongruent'\n\ncongruency_2_back = Factor('congruency_2_back', [\n    DerivedLevel('congruent_2b',   Window(two_back_con, [congruency], width=3, stride=1)),\n    DerivedLevel('incongruent_2b', Window(two_back_inc, [congruency], width=3, stride=1)),\n])"
-}
-
-EXAMPLE 5 — window + continuous, width=5: recent_congruency_proportion
-{
-  "compute_factor_code": "def compute_factor(window):\n    # fraction of the last W trials that were congruent\n    congruent_count = sum(1 for t in window if t['color'] == t['word'])\n    return float(congruent_count) / len(window)",
-  "sweetpea_code": "def sample_prop(win):\n    return sum(1 for v in win if v == 'congruent') / len(win)\n\nwindow_obj = ContinuousFactorWindow([congruency], width=5)\nrecent_congruency_proportion = ContinuousFactor(\n    'recent_congruency_proportion',\n    distribution=CustomDistribution(sample_prop, [window_obj])\n)"
-}
-
+━━━ BENCHMARK NEUTRALITY ━━━
+Implement only the factor specified in the user message. Do not assume canonical
+task factors. compute_factor may access only keys listed under Depends on.
 ━━━ OUTPUT FORMAT ━━━
 Return a JSON object with EXACTLY these two keys and NO other text:
 {

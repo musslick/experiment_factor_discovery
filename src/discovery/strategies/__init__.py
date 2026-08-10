@@ -29,23 +29,32 @@ def build_seeding_strategy(config, llm) -> SeedingStrategy:
         return LLMSeeder(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg)
 
     if cfg.type == "random":
-        return RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg)
+        return RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg, seed=config.seed)
 
     if cfg.type == "random_lookup":
-        return RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg)
+        return RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=cfg, seed=config.seed)
 
     if cfg.type == "mixed":
         components: List[Tuple[SeedingStrategy, int]] = []
-        for comp in cfg.components:
+        for component_index, comp in enumerate(cfg.components):
             n = comp.get("n_candidates", cfg.n_candidates)
             sub_type = comp.get("type", "llm")
             sub_cfg = _make_sub_seeder_cfg(comp)
+            component_seed = config.seed + component_index
             if sub_type == "llm":
                 components.append((LLMSeeder(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg), n))
             elif sub_type == "random":
-                components.append((RandomSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg), n))
+                components.append((RandomSeeder(
+                    disc_cfg=disc_cfg,
+                    seeder_cfg=sub_cfg,
+                    seed=component_seed,
+                ), n))
             elif sub_type == "random_lookup":
-                components.append((RandomLookupSeeder(disc_cfg=disc_cfg, seeder_cfg=sub_cfg), n))
+                components.append((RandomLookupSeeder(
+                    disc_cfg=disc_cfg,
+                    seeder_cfg=sub_cfg,
+                    seed=component_seed,
+                ), n))
             else:
                 raise ValueError(f"Unknown mixed seeder component type: {sub_type}")
         return MixedSeeder(components=components)
@@ -74,20 +83,21 @@ def build_evolution_strategy(config, llm) -> EvolutionStrategy:
         return LLMGeneticEvolver(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg, evolver_cfg=cfg)
 
     if cfg.type == "mutation":
-        return MutationEvolver()
+        return MutationEvolver(seed=config.seed)
 
     if cfg.type == "mixed":
         components: List[Tuple[EvolutionStrategy, int]] = []
-        for comp in cfg.components:
+        for component_index, comp in enumerate(cfg.components):
             n = comp.get("n_candidates", cfg.n_candidates)
             sub_type = comp.get("type", "llm")
             sub_cfg = _make_sub_evolver_cfg(comp)
+            component_seed = config.seed + component_index
             if sub_type == "llm":
                 components.append((LLMEvolver(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg), n))
             elif sub_type == "llm_genetic":
                 components.append((LLMGeneticEvolver(llm=llm, llm_cfg=llm_cfg, disc_cfg=disc_cfg, evolver_cfg=sub_cfg), n))
             elif sub_type == "mutation":
-                components.append((MutationEvolver(), n))
+                components.append((MutationEvolver(seed=component_seed), n))
             else:
                 raise ValueError(f"Unknown mixed evolver component type: {sub_type}")
         return MixedEvolver(components=components)

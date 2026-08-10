@@ -58,7 +58,7 @@ class SandboxResult:
 
 # Subprocess harness: reads serialised DataFrame from stdin.
 _SUBPROCESS_HARNESS = """\
-import json, sys, collections
+import json, sys, collections, math, itertools, functools, re
 
 # --- BEGIN PREDICATE CODE ---
 {predicate_code}
@@ -69,6 +69,10 @@ rows         = data['rows']
 factor_type  = data['factor_type']
 window_width = data.get('window_width', 2)
 n            = data['n']
+_efd_internal_keys = {{'__idx__', 'participant_id', 'trial_index', 'block_index'}}
+
+def _efd_visible_row(row):
+    return {{key: value for key, value in row.items() if key not in _efd_internal_keys}}
 
 results = [None] * n
 by_group = collections.defaultdict(list)
@@ -81,12 +85,13 @@ try:
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
-                results[orig] = compute_factor(row)
+                results[orig] = compute_factor(_efd_visible_row(row))
             else:  # window (includes former transition width=2)
                 if i < window_width - 1:
                     results[orig] = None
                 else:
-                    results[orig] = compute_factor(p_rows[i - window_width + 1 : i + 1])
+                    window = p_rows[i - window_width + 1 : i + 1]
+                    results[orig] = compute_factor([_efd_visible_row(trial) for trial in window])
 except Exception:
     import traceback
     traceback.print_exc(file=sys.stderr)
@@ -97,7 +102,7 @@ print(json.dumps(results))
 
 # Docker harness: data is embedded as a Python repr-string (no stdin needed).
 _DOCKER_HARNESS = """\
-import json, sys, collections
+import json, sys, collections, math, itertools, functools, re
 
 # --- BEGIN PREDICATE CODE ---
 {predicate_code}
@@ -108,6 +113,10 @@ rows         = data['rows']
 factor_type  = data['factor_type']
 window_width = data.get('window_width', 2)
 n            = data['n']
+_efd_internal_keys = {{'__idx__', 'participant_id', 'trial_index', 'block_index'}}
+
+def _efd_visible_row(row):
+    return {{key: value for key, value in row.items() if key not in _efd_internal_keys}}
 
 results = [None] * n
 by_group = collections.defaultdict(list)
@@ -120,12 +129,13 @@ try:
         for i, row in enumerate(p_rows):
             orig = row['__idx__']
             if factor_type == 'within_trial':
-                results[orig] = compute_factor(row)
+                results[orig] = compute_factor(_efd_visible_row(row))
             else:  # window (includes former transition width=2)
                 if i < window_width - 1:
                     results[orig] = None
                 else:
-                    results[orig] = compute_factor(p_rows[i - window_width + 1 : i + 1])
+                    window = p_rows[i - window_width + 1 : i + 1]
+                    results[orig] = compute_factor([_efd_visible_row(trial) for trial in window])
 except Exception:
     import traceback
     traceback.print_exc(file=sys.stderr)
@@ -313,10 +323,8 @@ def run_predicate(
     backend         : ``"subprocess"`` (default) or ``"docker"``.
     window_width    : Number of consecutive trial dicts passed to compute_factor
                       for window factors (ignored for within_trial).
-    depends_on      : Column names that compute_factor actually reads.  When
-                      provided, only these columns (plus the mandatory
-                      participant_id and trial_index) are serialised and sent
-                      to the subprocess, reducing payload size and parse time.
+    depends_on      : Column names visible to compute_factor. Participant and
+                      trial identifiers are retained only for internal grouping.
 
     Returns
     -------

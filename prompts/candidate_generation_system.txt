@@ -6,20 +6,15 @@ Your task is to propose candidate DERIVED FACTORS that might explain variance in
 
 TYPE 1 — within_trial
   Computed from a single trial's factor values.
-  Examples:
-    congruency: whether the ink colour matches the word meaning (colour == word → "congruent", else "incongruent")
-    bivalence:  whether the stimulus could be interpreted under either task
+  Infer candidate relations from the current task description and permitted factors.
 
 TYPE 2 — window
   Computed from a sliding window of W consecutive trials within a participant.
   window_width: how many consecutive trials to look back (minimum 2).
   The first window_width−1 trials of each participant have no value.
   window_width=2 is the classic "transition" (current vs. immediately preceding trial).
-  window_width≥3 enables longer-range dependencies (e.g. n-back effects).
-  Examples:
-    task_transition (width=2):   did the task repeat or switch from the previous trial?
-    congruency_2_back (width=3): was the trial two steps ago congruent?
-    response_run (width=3):      did the participant make the same response on both of the previous two trials?
+  window_width≥3 enables longer-range trial histories.
+  Infer useful temporal summaries without assuming a canonical task-specific factor.
 
 ━━━ FACTOR CLASS (return type) ━━━
 
@@ -34,16 +29,13 @@ CLASS B — continuous
   Treated as a linear numeric predictor — no level encoding needed.
   "levels" must be [] in the JSON output.
   Use when the theoretical variable is naturally graded rather than categorical.
-  Examples:
-    congruency_proportion:  fraction of the last N trials that were congruent (float 0–1)
-    recent_outcome:         running mean of the participant's behavioral outcome variable over a window
+  Never derive a candidate from the behavioral outcome variable.
 
 ━━━ PREFERENCE ORDER ━━━
 Prefer within_trial + discrete as a first pass.
 Use window only when the theoretical variable genuinely requires sequential context.
 Use continuous only when a graded quantity is the natural representation.
 Always prefer smaller window_width over larger (set window_width to the smallest value that captures the intended distinction).
-Window factors with large widths (window_width ≥ 4) are penalised more heavily in the complexity score.
 
 ━━━ SIMPLICITY PREFERENCE ━━━
 The pipeline discovers factors one at a time, round by round, building from simple to complex. Each accepted factor becomes available as a building block for later rounds.
@@ -52,17 +44,18 @@ Do NOT bundle two or more independent distinctions into a single multi-level fac
 Building-block factors that depend on already-discovered factors should also be considered.
 
 ━━━ INTERACTION EFFECTS ARE HANDLED SEPARATELY ━━━
-After each round's factor search, the pipeline automatically tests all pairwise interactions among already-discovered factors as separate model effects. You do not need to propose a factor that bundles the levels of two existing factors. If you find yourself proposing a multi-level factor whose levels are simply combinations of two existing factors' levels, propose the simpler underlying factors instead.
+The pipeline can test pairwise interactions among discovered factors separately. You do not need to propose a factor that bundles the levels of two existing factors. If you find yourself proposing a multi-level factor whose levels are simply combinations of two existing factors' levels, propose the simpler underlying factors instead.
 
 ━━━ RULES ━━━
 1. Each candidate must logically derive from a subset of the observable factors and/or already-discovered factors listed in the user message. List ALL factors it depends on in "depends_on".
-2. Proposed level names must be discrete strings (not numbers).
+2. For discrete factors, proposed level names must be strings (not numbers).
 3. Prefer 2-level discrete factors. Use more levels only when the partition is genuinely irreducible.
 4. Do NOT propose a factor that is just a renaming of an existing observable factor.
 5. Do NOT re-propose any factor listed under "Rejected candidates".
-6. Provide a short psychological rationale for why the factor might affect the behavioral outcome variable.
+6. In "description", state what the factor captures and why it might affect the behavioral outcome variable.
 7. window_width must be between 2 and <<max_window_width>> (inclusive).
 8. "levels" must be [] for continuous factors.
+9. Use only factors explicitly listed as permitted dependencies. Never use a configured outcome variable or a post-trial measurement.
 
 ━━━ OUTPUT FORMAT ━━━
 Return a JSON array and NOTHING ELSE — no explanation, no markdown fences, just the raw array.
@@ -79,6 +72,6 @@ Each element must have these exact keys:
   }
 ]
 Notes on fields:
-- "factor_class" defaults to "discrete" if omitted.
-- "window_width" is required when factor_type is "window"; omit it for "within_trial".
+- Include every field shown above.
+- Use "window_width": 2 for within_trial factors; use the actual width for window factors.
 - "levels" must be [] when factor_class is "continuous".

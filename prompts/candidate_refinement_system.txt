@@ -6,19 +6,15 @@ Your task is to propose REFINED or ALTERNATIVE candidate derived factors based o
 
 TYPE 1 — within_trial
   Computed from a single trial's factor values.
-  Examples:
-    congruency: whether the ink colour matches the word meaning (colour == word → "congruent", else "incongruent")
-    bivalence:  whether the stimulus could be interpreted under either task
+  Infer candidate relations from the current task description and permitted factors.
 
 TYPE 2 — window
   Computed from a sliding window of W consecutive trials within a participant.
   window_width: how many consecutive trials to look back (minimum 2).
   The first window_width−1 trials of each participant have no value.
   window_width=2 is the classic "transition" (current vs. immediately preceding trial).
-  window_width≥3 enables longer-range dependencies (e.g. n-back effects).
-  Examples:
-    task_transition (width=2):   did the task repeat or switch from the previous trial?
-    congruency_2_back (width=3): was the trial two steps ago congruent?
+  window_width≥3 enables longer-range trial histories.
+  Infer useful temporal summaries without assuming a canonical task-specific factor.
 
 ━━━ FACTOR CLASS (return type) ━━━
 
@@ -33,16 +29,13 @@ CLASS B — continuous
   "levels" must be [] in the JSON output.
 
 ━━━ SCORING EXPLANATION ━━━
-Each candidate was scored by its held-out predictive improvement over the current model.
-The score is the mean per-participant log-likelihood improvement across cross-validation folds.
-  Positive score → factor improves prediction (good)
-  Near-zero or negative score → factor adds little or no predictive value
-The SE reflects consistency across participants.
-The complexity denominator penalises factors that add more parameters:
-  discrete: n_params = n_levels − 1
-  continuous: n_params = 1 (but window factors with large widths are penalised too)
-score = (mean − λ·se) / (n_params^α · n_depends_on^β)
-Prefer narrow window widths and binary outcomes.
+The results below report the primary outcome's mean per-participant
+log-likelihood improvement across cross-validation folds and its SE.
+  Positive mean → factor improves prediction
+  Near-zero or negative mean → factor adds little or no predictive value
+The search may apply configured stability, complexity, dependency, and novelty
+adjustments when selecting a winner; those adjustments are not shown below.
+Prefer narrow window widths and binary factors.
 
 ━━━ SIMPLICITY PREFERENCE ━━━
 The pipeline discovers factors one at a time, building from simple to complex.
@@ -50,7 +43,7 @@ If a high-scoring candidate bundles two independent distinctions into a single m
 Building-block factors that depend on already-discovered factors are welcome.
 
 ━━━ INTERACTION EFFECTS ARE HANDLED SEPARATELY ━━━
-After each round's factor search, the pipeline automatically tests pairwise interactions. Do not propose multi-level factors that merely combine two existing factors' levels.
+The pipeline can test pairwise interactions among discovered factors separately. Do not propose multi-level factors that merely combine two existing factors' levels.
 
 ━━━ YOUR TASK ━━━
 Analyse the cross-validation scores of previously evaluated candidates and propose improved or alternative factors.
@@ -58,13 +51,14 @@ Focus primarily on the top performers: understand what they capture and propose 
 
 ━━━ RULES ━━━
 1. Each candidate must logically derive from a subset of the observable factors and/or already-discovered factors. List ALL factors it depends on in "depends_on".
-2. Proposed level names must be discrete strings (not numbers).
+2. For discrete factors, proposed level names must be strings (not numbers).
 3. Prefer binary discrete factors. Use more levels only when genuinely irreducible.
 4. Do NOT propose a factor that is just a renaming of an existing observable factor.
 5. Do NOT re-propose any factor listed under "Permanently banned factors".
 6. Do NOT reproduce exactly any already-evaluated candidate.
-7. Provide a short psychological rationale for why the factor might affect the behavioral outcome variable.
+7. In "description", state what the factor captures and why it might affect the behavioral outcome variable.
 8. window_width must be between 2 and <<max_window_width>> (inclusive).
+9. Use only factors explicitly listed as permitted dependencies. Never use a configured outcome variable or a post-trial measurement.
 
 ━━━ OUTPUT FORMAT ━━━
 Return a JSON array and NOTHING ELSE — no explanation, no markdown fences, just the raw array.
@@ -80,3 +74,7 @@ Each element must have these exact keys:
     "depends_on":   ["factor_a", "factor_b"]
   }
 ]
+Notes on fields:
+- Include every field shown above.
+- Use "window_width": 2 for within_trial factors; use the actual width for window factors.
+- "levels" must be [] when factor_class is "continuous".

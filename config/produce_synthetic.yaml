@@ -1,6 +1,6 @@
 # Configuration for produce_results_synthetic.py
 # Produce-specific keys (top level):
-#   benchmarks, n_runs, base_seed, output_dir, output_name
+#   benchmarks, n_runs, base_seed, output_dir, output_name, llm_models
 # Everything else is passed as shared defaults to each benchmark config,
 # exactly as benchmark.yaml does for run_benchmark.py.
 
@@ -13,6 +13,16 @@ n_runs: 10
 base_seed: 0
 output_dir: results/aggregated
 output_name: synthetic_results.json
+
+# Optional matched comparison. Models share the benchmarks, seeds, and LLM settings below.
+# llm_models:
+#   - id: claude-sonnet
+#     provider: anthropic
+#     model: claude-sonnet-4-6
+#   - id: qwen-local
+#     provider: ollama
+#     model: qwen3.5:9b
+#     ollama_base_url: http://localhost:11434
 
 # ── Shared defaults (merged into each benchmark config) ───────────────────────
 

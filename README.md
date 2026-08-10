@@ -260,6 +260,20 @@ Key parameters (all live in the benchmark/dataset YAML configs):
 | `llm` | `model` (default: `claude-sonnet-4-6`), `candidate_temperature`, `predicate_temperature` |
 | `statistical` | `min_level_count` (guards against near-constant factors) |
 
+### Running a model matrix
+
+Add `llm_models` to `config/produce_synthetic.yaml` to run the same benchmark and
+seed matrix for each model. Detailed results are isolated under
+`benchmarks.<benchmark>.models.<id>.runs`; the normal single-model result schema
+is unchanged when the matrix is absent. Runner errors are recorded in `failures`
+and cause a non-zero exit after outputs are written; zero-candidate runs remain
+completed runs. A compact `<output-stem>_model_summary.csv` is written next to
+the aggregated JSON.
+
+```bash
+python produce_results_synthetic.py --config config/produce_synthetic.yaml
+```
+
 ---
 
 ## Using your own empirical data

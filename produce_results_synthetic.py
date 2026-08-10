@@ -18,7 +18,9 @@ Usage:
 """
 
 import argparse
+import csv
 import json
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -47,6 +49,20 @@ BENCHMARK_DISPLAY: Dict[str, str] = {
 }
 
 _TYPE_MAP = {"transition": "window"}
+_LLM_MODEL_KEYS = {"id", "provider", "model", "ollama_base_url"}
+_LLM_PROVIDERS = {"anthropic", "ollama"}
+_MODEL_SUMMARY_FIELDS = (
+    "benchmark",
+    "model_id",
+    "provider",
+    "model",
+    "expected",
+    "completed",
+    "failed",
+    "mean_precision",
+    "mean_recall",
+    "mean_f1",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +116,9 @@ def _load_round_logs(report_dir: Path) -> List[Dict[str, Any]]:
         for sc in all_scored:
             p = sc.get("proposer", "llm")
             proposer_counts[p] = proposer_counts.get(p, 0) + 1
+        validation_improvement = data.get("validation_improvement", 0.0)
+        if validation_improvement is not None:
+            validation_improvement = float(validation_improvement)
         logs.append({
             "round": data.get("round", len(logs) + 1),
             "accepted": bool(data.get("accepted", False)),
@@ -107,7 +126,7 @@ def _load_round_logs(report_dir: Path) -> List[Dict[str, Any]]:
             "n_hard_rejected": n_hard_rejected,
             "winner_cv_mean": float(winner.get("cv_score_mean", 0.0)) if winner else 0.0,
             "winner_proposer": winner.get("proposer", "llm") if winner else None,
-            "validation_improvement": float(data.get("validation_improvement", 0.0)),
+            "validation_improvement": validation_improvement,
             "cumulative_synthesis_calls": cumulative_calls,
             "n_llm_scored": proposer_counts.get("llm", 0),
             "n_random_seeder_scored": proposer_counts.get("random_seeder", 0),
@@ -218,15 +237,185 @@ def _extract_run_result(
     }
 
 
-def _already_done(output: Dict[str, Any], benchmark_key: str, seed: int) -> bool:
-    """Return True if this benchmark+seed is already recorded in *output*."""
-    runs = output.get("benchmarks", {}).get(benchmark_key, {}).get("runs", [])
+def _parse_llm_models(raw_models: Any) -> List[Dict[str, str]]:
+    """Validate the optional model matrix from the produce config."""
+    if raw_models is None:
+        return []
+    if not isinstance(raw_models, list) or not raw_models:
+        raise ValueError("llm_models must be a non-empty list")
+
+    models: List[Dict[str, str]] = []
+    seen_ids = set()
+    for index, raw in enumerate(raw_models):
+        if not isinstance(raw, dict):
+            raise ValueError(f"llm_models[{index}] must be a mapping")
+
+        unknown = set(raw) - _LLM_MODEL_KEYS
+        if unknown:
+            raise ValueError(
+                f"llm_models[{index}] has unsupported keys: {', '.join(sorted(unknown))}"
+            )
+
+        model_id = raw.get("id")
+        provider = raw.get("provider")
+        model = raw.get("model")
+        if not isinstance(model_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]*", model_id
+        ):
+            raise ValueError(
+                f"llm_models[{index}].id must contain only letters, numbers, '.', '_' or '-'"
+            )
+        if model_id in seen_ids:
+            raise ValueError(f"Duplicate llm_models id: {model_id}")
+        if provider not in _LLM_PROVIDERS:
+            raise ValueError(
+                f"llm_models[{index}].provider must be one of: "
+                f"{', '.join(sorted(_LLM_PROVIDERS))}"
+            )
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError(f"llm_models[{index}].model must be a non-empty string")
+
+        parsed = {"id": model_id, "provider": provider, "model": model}
+        base_url = raw.get("ollama_base_url")
+        if base_url is not None:
+            if not isinstance(base_url, str) or not base_url.strip():
+                raise ValueError(
+                    f"llm_models[{index}].ollama_base_url must be a non-empty string"
+                )
+            parsed["ollama_base_url"] = base_url
+
+        seen_ids.add(model_id)
+        models.append(parsed)
+
+    return models
+
+
+def _apply_llm_model(cfg, model_spec: Optional[Dict[str, str]]) -> None:
+    if model_spec is None:
+        return
+    cfg.llm.provider = model_spec["provider"]
+    cfg.llm.model = model_spec["model"]
+    if "ollama_base_url" in model_spec:
+        cfg.llm.ollama_base_url = model_spec["ollama_base_url"]
+
+
+def _ensure_model_entry(
+    benchmark_output: Dict[str, Any],
+    model_spec: Dict[str, str],
+) -> Dict[str, Any]:
+    models = benchmark_output.setdefault("models", {})
+    model_id = model_spec["id"]
+    expected = {k: v for k, v in model_spec.items() if k != "id"}
+    existing = models.get(model_id)
+    if existing is None:
+        existing = {**expected, "runs": [], "failures": []}
+        models[model_id] = existing
+    else:
+        actual = {
+            key: existing[key]
+            for key in _LLM_MODEL_KEYS - {"id"}
+            if key in existing
+        }
+        if actual != expected:
+            raise ValueError(
+                f"Cannot resume model '{model_id}': stored configuration {actual} "
+                f"does not match {expected}"
+            )
+        existing.setdefault("runs", [])
+        existing.setdefault("failures", [])
+    return existing
+
+
+def _record_model_failure(
+    model_output: Dict[str, Any],
+    seed: int,
+    stage: str,
+    error: Exception,
+    run_dir: Path,
+) -> None:
+    failure = {
+        "seed": seed,
+        "stage": stage,
+        "error": str(error),
+        "run_dir": str(run_dir),
+    }
+    model_output["failures"] = [
+        existing
+        for existing in model_output.get("failures", [])
+        if existing.get("seed") != seed
+    ] + [failure]
+
+
+def _clear_model_failure(model_output: Dict[str, Any], seed: int) -> None:
+    model_output["failures"] = [
+        failure
+        for failure in model_output.get("failures", [])
+        if failure.get("seed") != seed
+    ]
+
+
+def _already_done(
+    output: Dict[str, Any],
+    benchmark_key: str,
+    seed: int,
+    model_spec: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Return True if this benchmark, model and seed are already recorded."""
+    benchmark_output = output.get("benchmarks", {}).get(benchmark_key, {})
+    if model_spec is None:
+        runs = benchmark_output.get("runs", [])
+    else:
+        runs = (
+            benchmark_output.get("models", {})
+            .get(model_spec["id"], {})
+            .get("runs", [])
+        )
     return any(r["seed"] == seed for r in runs)
 
 
 def _save_output(output: Dict[str, Any], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, indent=2))
+
+
+def _write_model_summary(
+    output: Dict[str, Any], output_path: Path, expected_runs: int
+) -> Path:
+    rows = []
+    for benchmark_key, benchmark in output.get("benchmarks", {}).items():
+        for model_id, model_entry in benchmark.get("models", {}).items():
+            runs = model_entry.get("runs", [])
+
+            def mean(metric: str) -> Optional[float]:
+                if not runs:
+                    return None
+                return round(sum(float(run[metric]) for run in runs) / len(runs), 6)
+
+            rows.append({
+                "benchmark": benchmark_key,
+                "model_id": model_id,
+                "provider": model_entry.get("provider", ""),
+                "model": model_entry.get("model", ""),
+                "expected": expected_runs,
+                "completed": len(runs),
+                "failed": len(model_entry.get("failures", [])),
+                "mean_precision": mean("precision"),
+                "mean_recall": mean("recall"),
+                "mean_f1": mean("f1"),
+            })
+
+    summary_path = output_path.with_name(f"{output_path.stem}_model_summary.csv")
+    with summary_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=_MODEL_SUMMARY_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\nModel summary written to {summary_path}")
+    print("  " + " | ".join(_MODEL_SUMMARY_FIELDS))
+    for row in rows:
+        values = ("" if row[key] is None else str(row[key]) for key in _MODEL_SUMMARY_FIELDS)
+        print("  " + " | ".join(values))
+    return summary_path
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +429,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         default="config/produce_synthetic.yaml",
-        help="YAML config with benchmarks, n_runs, base_seed, output_dir, output_name",
+        help="YAML config with benchmarks, run grid, output path, and optional llm_models",
     )
     parser.add_argument(
         "--benchmarks",
@@ -280,16 +469,15 @@ def main() -> None:
     base_seed: int = args.base_seed if args.base_seed is not None else int(yaml_cfg.get("base_seed", 0))
     output_dir: str = args.output_dir or yaml_cfg.get("output_dir", "results/synthetic_aggregated")
     output_name: str = args.output_name or yaml_cfg.get("output_name", "aggregated_results.json")
+    llm_models = _parse_llm_models(yaml_cfg.get("llm_models"))
 
     output_path = Path(output_dir) / output_name
 
-    # Copy the produce config into the output directory for reproducibility.
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    shutil.copy(args.config, Path(output_dir) / Path(args.config).name)
-
     # Extract shared defaults for load_config(): everything in the produce YAML
     # except the produce-specific top-level keys.
-    _PRODUCE_KEYS = {"benchmarks", "n_runs", "base_seed", "output_dir", "output_name"}
+    _PRODUCE_KEYS = {
+        "benchmarks", "n_runs", "base_seed", "output_dir", "output_name", "llm_models",
+    }
     shared_defaults: Dict[str, Any] = {k: v for k, v in yaml_cfg.items() if k not in _PRODUCE_KEYS} or None
 
     # ------------------------------------------------------------------
@@ -310,6 +498,38 @@ def main() -> None:
         else:
             print(f"Resume file {resume_path} not found; starting fresh.")
 
+    stored_benchmarks = output.get("benchmarks", {})
+    if stored_benchmarks:
+        has_legacy_results = any(
+            "runs" in benchmark for benchmark in stored_benchmarks.values()
+        )
+        has_matrix_results = any(
+            "models" in benchmark for benchmark in stored_benchmarks.values()
+        )
+        if llm_models:
+            if has_legacy_results:
+                raise ValueError(
+                    "Cannot resume single-model results with llm_models in the config"
+                )
+            if output.get("llm_models") != llm_models:
+                raise ValueError("Cannot resume with a different llm_models matrix")
+            for key, requested in (("n_runs", n_runs), ("base_seed", base_seed)):
+                if output.get(key) != requested:
+                    raise ValueError(f"Cannot resume with a different {key}")
+        elif has_matrix_results:
+            raise ValueError(
+                "Cannot resume multi-model results without llm_models in the config"
+            )
+
+    if llm_models:
+        output["llm_models"] = llm_models
+
+    # Copy only after resume validation so rejected resumes leave prior artifacts intact.
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    shutil.copy(args.config, Path(output_dir) / Path(args.config).name)
+
+    invocation_had_failures = False
+
     # ------------------------------------------------------------------
     # Run benchmarks
     # ------------------------------------------------------------------
@@ -323,64 +543,109 @@ def main() -> None:
 
         # Initialise benchmark entry in output if not present
         if bm_key not in output["benchmarks"]:
-            output["benchmarks"][bm_key] = {
+            benchmark_output = {
                 "config_path": config_yaml_path,
                 "display_name": display_name,
                 "ground_truth_factors": _gt_factor_dicts(cfg_template),
-                "runs": [],
             }
-
-        for run_idx in range(n_runs):
-            seed = base_seed + run_idx
-
-            if _already_done(output, bm_key, seed):
-                print(
-                    f"[{display_name}] Run {run_idx + 1}/{n_runs} (seed={seed}) — already done, skipping."
+            benchmark_output["models" if llm_models else "runs"] = {} if llm_models else []
+            output["benchmarks"][bm_key] = benchmark_output
+        benchmark_output = output["benchmarks"][bm_key]
+        if llm_models:
+            if "runs" in benchmark_output:
+                raise ValueError(
+                    "Cannot resume single-model results with llm_models in the config"
                 )
-                continue
+            for entry in benchmark_output.setdefault("models", {}).values():
+                entry.setdefault("failures", [])
+        elif "models" in benchmark_output:
+            raise ValueError(
+                "Cannot resume multi-model results without llm_models in the config"
+            )
+        else:
+            benchmark_output.setdefault("runs", [])
 
-            print(f"\n[{display_name}] Run {run_idx + 1}/{n_runs} (seed={seed}) ...")
+        model_matrix: List[Optional[Dict[str, str]]] = llm_models or [None]
+        for model_spec in model_matrix:
+            if model_spec is None:
+                model_output = benchmark_output
+                run_label = display_name
+            else:
+                model_output = _ensure_model_entry(benchmark_output, model_spec)
+                run_label = f"{display_name} / {model_spec['id']}"
 
-            # Build a fresh cfg with the correct seed
-            cfg = load_config(config_yaml_path, defaults=shared_defaults)
-            cfg.seed = seed
+            for run_idx in range(n_runs):
+                seed = base_seed + run_idx
 
-            # Each run gets its own subdirectory so logs don't collide
-            run_tag = f"{bm_key}_seed{seed}"
-            run_dir = Path(output_dir) / "runs" / run_tag
-            run_dir.mkdir(parents=True, exist_ok=True)
+                if _already_done(output, bm_key, seed, model_spec):
+                    print(
+                        f"[{run_label}] Run {run_idx + 1}/{n_runs} "
+                        f"(seed={seed}) — already done, skipping."
+                    )
+                    continue
 
-            try:
-                run_single_benchmark(cfg, run_dir, regenerate=args.regenerate)
-            except Exception as exc:
-                print(f"  ERROR running {display_name} seed={seed}: {exc}", file=sys.stderr)
-                # Save progress so far and continue
+                print(f"\n[{run_label}] Run {run_idx + 1}/{n_runs} (seed={seed}) ...")
+
+                # Build a fresh cfg with the correct seed and model.
+                cfg = load_config(config_yaml_path, defaults=shared_defaults)
+                cfg.seed = seed
+                _apply_llm_model(cfg, model_spec)
+
+                # Each run gets its own subdirectory so logs don't collide.
+                run_tag = f"{bm_key}_seed{seed}"
+                run_root = Path(output_dir) / "runs"
+                if model_spec is not None:
+                    run_root /= model_spec["id"]
+                run_dir = run_root / run_tag
+                run_dir.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    run_single_benchmark(cfg, run_dir, regenerate=args.regenerate)
+                except Exception as exc:
+                    print(f"  ERROR running {run_label} seed={seed}: {exc}", file=sys.stderr)
+                    if model_spec is not None:
+                        _record_model_failure(
+                            model_output, seed, "benchmark_execution", exc, run_dir
+                        )
+                        invocation_had_failures = True
+                    # Save progress so far and continue
+                    _save_output(output, output_path)
+                    continue
+
+                # Collect results
+                report_dir = run_dir / bm_name
+                try:
+                    run_result = _extract_run_result(report_dir, cfg, seed, run_dir)
+                except Exception as exc:
+                    print(
+                        f"  ERROR parsing results for {run_label} seed={seed}: {exc}",
+                        file=sys.stderr,
+                    )
+                    if model_spec is not None:
+                        _record_model_failure(
+                            model_output, seed, "result_parsing", exc, run_dir
+                        )
+                        invocation_had_failures = True
+                    _save_output(output, output_path)
+                    continue
+
+                if model_spec is not None:
+                    _clear_model_failure(model_output, seed)
+                model_output["runs"].append(run_result)
+
+                # Update timestamp and save immediately (crash recovery)
+                output["generated_at"] = datetime.now(timezone.utc).isoformat()
                 _save_output(output, output_path)
-                continue
-
-            # Collect results
-            report_dir = run_dir / bm_name
-            try:
-                run_result = _extract_run_result(report_dir, cfg, seed, run_dir)
-            except Exception as exc:
-                print(
-                    f"  ERROR parsing results for {display_name} seed={seed}: {exc}",
-                    file=sys.stderr,
-                )
-                _save_output(output, output_path)
-                continue
-
-            output["benchmarks"][bm_key]["runs"].append(run_result)
-
-            # Update timestamp and save immediately (crash recovery)
-            output["generated_at"] = datetime.now(timezone.utc).isoformat()
-            _save_output(output, output_path)
-            print(f"  Saved intermediate results to {output_path}")
+                print(f"  Saved intermediate results to {output_path}")
 
     # Final save
     output["generated_at"] = datetime.now(timezone.utc).isoformat()
     _save_output(output, output_path)
     print(f"\nAggregated results written to {output_path}")
+    if llm_models:
+        _write_model_summary(output, output_path, n_runs)
+    if invocation_had_failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

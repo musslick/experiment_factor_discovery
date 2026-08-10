@@ -18,6 +18,8 @@ def _merge_unique(
     banned_names: set,
     n_want: int,
 ) -> List[CandidateFactor]:
+    if n_want <= 0:
+        return []
     seen = set(banned_names)
     merged = []
     for batch in batches:
@@ -44,8 +46,9 @@ class MixedSeeder(SeedingStrategy):
         banned = {c.name for c in context.hard_rejected}
         batches = []
         for seeder, n_cand in self._components:
-            sub_ctx = _with_n(context, n_cand)
-            batches.append(seeder.seed(sub_ctx))
+            quota = max(0, n_cand)
+            sub_ctx = _with_n(context, quota)
+            batches.append(seeder.seed(sub_ctx)[:quota])
         return _merge_unique(batches, banned, context.n_to_generate)
 
 
@@ -62,8 +65,9 @@ class MixedEvolver(EvolutionStrategy):
         banned = {c.name for c in context.hard_rejected}
         batches = []
         for evolver, n_cand in self._components:
-            sub_ctx = _with_n(context, n_cand)
-            batches.append(evolver.evolve(sub_ctx))
+            quota = max(0, n_cand)
+            sub_ctx = _with_n(context, quota)
+            batches.append(evolver.evolve(sub_ctx)[:quota])
         return _merge_unique(batches, banned, context.n_to_generate)
 
 
