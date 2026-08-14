@@ -39,7 +39,7 @@ class TestParseEmpiricalConfig:
 
     def test_hidden_factors(self):
         cfg = load_config(EMPIRICAL_CFG)
-        assert len(cfg.dataset.hidden_factors) == 1
+        assert len(cfg.dataset.hidden_factors) == 2
         hf = cfg.dataset.hidden_factors[0]
         assert hf.name == "congruency"
         assert hf.column == "congruency"
@@ -48,14 +48,14 @@ class TestParseEmpiricalConfig:
     def test_ground_truth_auto_built(self):
         """EvaluationConfig.ground_truth_factors is auto-built from hidden_factors."""
         cfg = load_config(EMPIRICAL_CFG)
-        assert len(cfg.evaluation.ground_truth_factors) == 1
+        assert len(cfg.evaluation.ground_truth_factors) == 2
         gtf = cfg.evaluation.ground_truth_factors[0]
         assert gtf.name == "congruency"
         assert gtf.levels == ["congruent", "incongruent"]
 
     def test_extra_columns(self):
         cfg = load_config(EMPIRICAL_CFG)
-        assert "trialnum" in cfg.dataset.extra_columns
+        assert "trial" in cfg.dataset.extra_columns
         assert "blocknum" in cfg.dataset.extra_columns
 
     def test_data_generation_is_none(self):
@@ -146,7 +146,7 @@ class TestBaselineFormula:
     def test_empirical_null_formula_used(self):
         cfg = load_config(EMPIRICAL_CFG)
         formula = _build_baseline_formula(cfg)
-        assert formula == "np.log(latency) ~ C(color) + C(word)"
+        assert formula == "accuracy ~ 1"
 
     def test_null_formula_override(self):
         cfg = load_config(EMPIRICAL_CFG)
@@ -195,7 +195,7 @@ class TestEmpiricalDataLoading:
 
     def test_extra_columns_present(self, loaded):
         full_df, input_df = loaded
-        for col in ("trialnum", "blocknum", "blockcode"):
+        for col in ("trial", "blocknum", "blockcode"):
             assert col in full_df.columns
             assert col in input_df.columns
 
