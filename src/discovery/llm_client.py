@@ -83,7 +83,16 @@ class LLMClient(BaseLLMClient):
                     messages=[{"role": "user", "content": user}],
                     temperature=temperature,
                 )
-                return response.content[0].text
+                text_blocks = [
+                    block.text
+                    for block in response.content
+                    if getattr(block, "type", None) == "text"
+                    and isinstance(getattr(block, "text", None), str)
+                    and block.text
+                ]
+                if not text_blocks:
+                    raise LLMError("Anthropic response contained no text block")
+                return "\n".join(text_blocks)
             except anthropic.RateLimitError as exc:
                 last_exc = exc
                 time.sleep(5 * (2 ** attempt))
@@ -121,18 +130,28 @@ class OllamaLLMClient(BaseLLMClient):
         max_tokens: int = 2000,
         temperature: float = 0.7,
     ) -> str:
-        try:
-            response = self._client.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                options={"temperature": temperature, "num_predict": max_tokens},
-            )
-            return response.message.content
-        except Exception as exc:
-            raise LLMError(f"Ollama error: {exc}") from exc
+        think = "low" if "gpt-oss" in self.model.lower() else False
+        for attempt in range(3):
+            try:
+                response = self._client.chat(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    think=think,
+                    options={"temperature": temperature, "num_predict": max_tokens},
+                )
+            except Exception as exc:
+                raise LLMError(f"Ollama error: {exc}") from exc
+
+            content = response.message.content
+            if content and content.strip():
+                return content
+            if attempt < 2:
+                time.sleep(2**attempt)
+
+        raise LLMError("Ollama response contained no content after 3 attempts")
 
 
 def make_llm_client(llm_cfg) -> BaseLLMClient:

@@ -38,7 +38,7 @@ def _fill(template: str, **subs: str) -> str:
 def _format_discovered_section(discovered: List[DiscoveredFactor]) -> str:
     if not discovered:
         return ""
-    lines = ["Already-discovered factor columns (available as trial dict keys):"]
+    lines = ["Permitted already-discovered factor definitions:"]
     for d in discovered:
         if d.candidate.factor_class == "continuous":
             lines.append(
@@ -80,7 +80,11 @@ def _parse_synthesis_response(raw: str) -> Optional[dict]:
     except json.JSONDecodeError:
         return None
 
-    if "compute_factor_code" not in obj or "sweetpea_code" not in obj:
+    if not isinstance(obj, dict):
+        return None
+    if not isinstance(obj.get("compute_factor_code"), str):
+        return None
+    if not isinstance(obj.get("sweetpea_code"), str):
         return None
     return obj
 

@@ -13,11 +13,10 @@ semantics-guided recombination operator over a scored population, rather than
 a cold-start generator.
 """
 
-import json
-import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from src.discovery.candidate_generator import _parse_candidates
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor
 from src.discovery.llm_client import LLMClient
 from src.discovery.strategies.base import EvolutionStrategy, ScoredCandidate, SearchContext
@@ -251,36 +250,12 @@ def _build_operator_assignments(
 # Response parser
 # ---------------------------------------------------------------------------
 
-def _parse_offspring(raw: str, round_num: int) -> List[CandidateFactor]:
-    text = raw.strip()
-    fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL)
-    if fence:
-        text = fence.group(1)
-    else:
-        bracket = re.search(r"\[.*\]", text, re.DOTALL)
-        if bracket:
-            text = bracket.group(0)
-    try:
-        items = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Could not parse genetic offspring as JSON: {exc}\nRaw: {raw[:400]}") from exc
-
-    candidates = []
-    for item in items:
-        try:
-            candidates.append(CandidateFactor(
-                name=str(item["name"]).strip(),
-                description=str(item.get("description", "")).strip(),
-                factor_type=str(item["factor_type"]).strip(),
-                factor_class=str(item.get("factor_class", "discrete")).strip(),
-                window_width=int(item.get("window_width") or 2),
-                levels=[str(lv).strip() for lv in item.get("levels", [])],
-                depends_on=[str(d).strip() for d in item.get("depends_on", [])],
-                round_num=round_num,
-            ))
-        except KeyError as exc:
-            print(f"  [llm_genetic_evolver] Skipping malformed offspring (missing {exc}): {item}")
-    return candidates
+def _parse_offspring(
+    raw: str,
+    round_num: int,
+    allowed_dependencies: set[str],
+) -> List[CandidateFactor]:
+    return _parse_candidates(raw, round_num, allowed_dependencies)
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +299,16 @@ class LLMGeneticEvolver(EvolutionStrategy):
             context.n_to_generate, operator_mix,
         )
 
-        system = _load("genetic_evolution_system.txt")
+        system = _fill(
+            _load("genetic_evolution_system.txt"),
+            max_window_width=str(context.max_window_width),
+        )
         user_template = _load("genetic_evolution_user.txt")
 
         observable_names = [f["name"] for f in context.observable_factors]
+        allowed_dependencies = set(observable_names) | {
+            factor.column_name for factor in context.discovered_factors
+        }
         observable_descriptions = {
             f["name"]: f.get("description", "")
             for f in context.observable_factors
@@ -356,7 +337,9 @@ class LLMGeneticEvolver(EvolutionStrategy):
         )
 
         try:
-            offspring = _parse_offspring(raw, context.round_num)
+            offspring = _parse_offspring(
+                raw, context.round_num, allowed_dependencies
+            )
         except ValueError as exc:
             print(f"  [llm_genetic_evolver] Parse error: {exc}")
             return []

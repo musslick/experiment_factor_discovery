@@ -4,4 +4,4 @@ Already-discovered factors:
 Candidate interaction pairs to rank (currently unordered):
 <<candidate_interactions>>
 
-Rank all candidate interaction pairs from most to least psychologically plausible as predictors of accuracy. Return a JSON array as specified in the system prompt.
+Rank all candidate interaction pairs from most to least psychologically plausible as predictors of the behavioral outcome. Return a JSON array as specified in the system prompt.

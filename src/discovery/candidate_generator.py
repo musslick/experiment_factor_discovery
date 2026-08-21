@@ -5,9 +5,10 @@ previously rejected candidates).
 """
 
 import json
+import keyword
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Collection, Dict, List, Optional, Tuple
 
 from src.discovery.llm_client import LLMClient
 from src.discovery.factor_registry import CandidateFactor, DiscoveredFactor
@@ -79,7 +80,69 @@ def _format_rejected(rejected: List[CandidateFactor]) -> str:
     return "\n".join(lines)
 
 
-def _parse_candidates(raw: str, round_num: int) -> List[CandidateFactor]:
+def validate_candidate_dependencies(
+    candidate: CandidateFactor,
+    allowed_dependencies: Collection[str],
+) -> Tuple[bool, List[str]]:
+    """Return whether a candidate uses only explicitly permitted factors."""
+    if not candidate.depends_on:
+        return False, []
+    allowed = set(allowed_dependencies)
+    invalid = sorted(set(candidate.depends_on) - allowed)
+    return not invalid, invalid
+
+
+_SAFE_FACTOR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def validate_candidate_structure(
+    candidate: CandidateFactor,
+    existing_columns: Collection[str],
+    allowed_factor_types: Collection[str],
+    allowed_factor_classes: Collection[str],
+    max_window_width: int,
+) -> Tuple[bool, Optional[str]]:
+    """Validate candidate metadata before synthesis or execution."""
+    name = candidate.name
+    if (
+        not isinstance(name, str)
+        or keyword.iskeyword(name)
+        or _SAFE_FACTOR_NAME.fullmatch(name) is None
+    ):
+        return False, f"unsafe_name ({name!r}; expected a safe identifier)"
+    if name in existing_columns:
+        return False, f"name_collision ({name!r} is already a data column)"
+    if candidate.factor_type not in allowed_factor_types:
+        return False, f"factor_type_not_allowed ({candidate.factor_type!r})"
+    if candidate.factor_class not in allowed_factor_classes:
+        return False, f"factor_class_not_allowed ({candidate.factor_class!r})"
+    if candidate.factor_type == "window" and (
+        not isinstance(candidate.window_width, int)
+        or isinstance(candidate.window_width, bool)
+        or not 2 <= candidate.window_width <= max_window_width
+    ):
+        return False, (
+            f"invalid_window_width ({candidate.window_width!r}; "
+            f"expected 2..{max_window_width})"
+        )
+    if candidate.factor_class == "discrete":
+        nonempty_levels = {
+            str(level).strip()
+            for level in candidate.levels
+            if level is not None and str(level).strip()
+        }
+        if len(nonempty_levels) < 2:
+            return False, "invalid_levels (discrete factors require at least two distinct nonempty levels)"
+    elif candidate.levels:
+        return False, "invalid_levels (continuous factors must not declare levels)"
+    return True, None
+
+
+def _parse_candidates(
+    raw: str,
+    round_num: int,
+    allowed_dependencies: Optional[Collection[str]] = None,
+) -> List[CandidateFactor]:
     """
     Extract a JSON array from the LLM response.
     Handles both raw JSON and JSON wrapped in markdown code fences.
@@ -99,25 +162,47 @@ def _parse_candidates(raw: str, round_num: int) -> List[CandidateFactor]:
         items = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Could not parse candidate list as JSON: {exc}\nRaw: {raw[:400]}") from exc
+    if not isinstance(items, list):
+        raise ValueError("Candidate response must be a JSON array")
 
     candidates = []
     for item in items:
+        if not isinstance(item, dict):
+            print(f"  [candidate_generator] Skipping malformed candidate: {item}")
+            continue
         try:
-            candidates.append(
-                CandidateFactor(
-                    name=str(item["name"]).strip(),
-                    description=str(item.get("description", "")).strip(),
-                    factor_type=str(item["factor_type"]).strip(),
-                    factor_class=str(item.get("factor_class", "discrete")).strip(),
-                    window_width=int(item.get("window_width") or 2),
-                    levels=[str(lv).strip() for lv in item.get("levels", [])],
-                    depends_on=[str(d).strip() for d in item.get("depends_on", [])],
-                    round_num=round_num,
-                )
+            levels = item.get("levels", [])
+            depends_on = item.get("depends_on", [])
+            if not isinstance(levels, list) or not isinstance(depends_on, list):
+                raise TypeError("levels and depends_on must be lists")
+            candidate = CandidateFactor(
+                name=str(item["name"]).strip(),
+                description=str(item.get("description", "")).strip(),
+                factor_type=str(item["factor_type"]).strip(),
+                factor_class=str(item.get("factor_class", "discrete")).strip(),
+                window_width=int(item.get("window_width") or 2),
+                levels=[str(lv).strip() for lv in levels],
+                depends_on=[str(d).strip() for d in depends_on],
+                round_num=round_num,
             )
-        except KeyError as exc:
-            # Skip malformed items rather than crashing
-            print(f"  [candidate_generator] Skipping malformed candidate (missing {exc}): {item}")
+            if allowed_dependencies is not None:
+                valid, invalid = validate_candidate_dependencies(
+                    candidate, allowed_dependencies
+                )
+                if not valid:
+                    reason = (
+                        f"unknown dependencies {invalid}"
+                        if invalid
+                        else "empty depends_on"
+                    )
+                    print(
+                        f"  [candidate_generator] Skipping candidate "
+                        f"'{candidate.name}' ({reason})"
+                    )
+                    continue
+            candidates.append(candidate)
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"  [candidate_generator] Skipping malformed candidate ({exc}): {item}")
     return candidates
 
 
@@ -193,7 +278,10 @@ def refine_candidates(
     Only hard_rejected factors are permanently banned; soft-rejected candidates
     from earlier rounds may be refined or reintroduced.
     """
-    system = _load("candidate_refinement_system.txt")
+    system = _fill(
+        _load("candidate_refinement_system.txt"),
+        max_window_width=str(max_window_width),
+    )
     user_template = _load("candidate_refinement_user.txt")
 
     scored_str, top_str = _format_scored_candidates(scored_candidates, top_k)
@@ -216,7 +304,12 @@ def refine_candidates(
                        max_tokens=max_tokens, temperature=temperature)
 
     try:
-        return _parse_candidates(raw, round_num)
+        allowed_dependencies = set(observable_factors) | {
+            factor.column_name for factor in discovered_so_far
+        }
+        return _parse_candidates(
+            raw, round_num, allowed_dependencies
+        )[:n_to_generate]
     except ValueError as exc:
         print(f"  [refine_candidates] Parse error: {exc}")
         return []
@@ -240,7 +333,10 @@ def generate_candidates(
 
     Returns a list of CandidateFactor objects (may be empty on parse error).
     """
-    system = _load("candidate_generation_system.txt")
+    system = _fill(
+        _load("candidate_generation_system.txt"),
+        max_window_width=str(max_window_width),
+    )
     user_template = _load("candidate_generation_user.txt")
 
     user = _fill(
@@ -257,7 +353,12 @@ def generate_candidates(
                        max_tokens=max_tokens, temperature=temperature)
 
     try:
-        return _parse_candidates(raw, round_num)
+        allowed_dependencies = set(observable_factors) | {
+            factor.column_name for factor in discovered_so_far
+        }
+        return _parse_candidates(
+            raw, round_num, allowed_dependencies
+        )[:max_candidates]
     except ValueError as exc:
         print(f"  [candidate_generator] Parse error: {exc}")
         return []

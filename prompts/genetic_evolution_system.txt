@@ -6,12 +6,12 @@ Your task is to propose EVOLVED candidate derived factors based on a population 
 
 TYPE 1 — within_trial
   Computed from a single trial's factor values.
-  Example: congruency: colour == word → "congruent" else "incongruent"
+  Infer candidate relations from the supplied parent population and permitted factors.
 
 TYPE 2 — window
   Computed from a sliding window of W consecutive trials.
   window_width: minimum 2, maximum <<max_window_width>>.
-  Example: task_transition (width=2): did task repeat or switch?
+  Do not assume canonical task-specific temporal factors.
 
 ━━━ FACTOR CLASS (return type) ━━━
 
@@ -64,6 +64,7 @@ Use smaller window widths over larger. Each factor added to a model must earn it
 6. window_width must be between 2 and <<max_window_width>> (inclusive).
 7. "levels" must be [] for continuous factors.
 8. Include an "operator_applied" field explaining which operator and parent(s) you used.
+9. Use only factors explicitly listed as permitted dependencies. Never use a configured outcome variable or a post-trial measurement.
 
 ━━━ OUTPUT FORMAT ━━━
 Return a JSON array and NOTHING ELSE — no explanation, no markdown fences.

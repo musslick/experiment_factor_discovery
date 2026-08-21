@@ -4,9 +4,8 @@ Your task is to rank a list of candidate INTERACTION EFFECTS by their psychologi
 
 Each interaction is a pairwise combination of two already-discovered derived factors. An interaction effect is significant when the effect of one factor on the behavioral outcome variable depends on the level of the other factor.
 
-For example:
-  congruency × task_transition — the Stroop congruency effect may be larger on task-switch trials than task-repeat trials (interaction between task context and stimulus conflict).
-  congruency × previous_congruency — the congruency sequence effect (CSE): being incongruent on the previous trial modulates the current congruency effect.
+Rank only the supplied interactions. Do not assume or introduce canonical effects
+that are not present in the discovered-factor list.
 
 RULES
 1. Rank interactions from most to least plausible based on established cognitive science theory.
@@ -14,12 +13,11 @@ RULES
 3. Include ALL interactions in your ranking — do not omit any.
 
 OUTPUT FORMAT
-Return a JSON array and NOTHING ELSE — no explanation, no markdown fences, just the raw array.
+Return a JSON array in ranked order and NOTHING ELSE — no explanation, no markdown fences, just the raw array.
 Each element must have these exact keys:
 [
   {
     "factors":   ["factor_a", "factor_b"],
-    "priority":  1,
     "rationale": "one sentence explaining why this interaction is plausible"
   }
 ]

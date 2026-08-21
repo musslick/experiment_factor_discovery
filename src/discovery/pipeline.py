@@ -199,19 +199,21 @@ def run_discovery_pipeline(
     # with full_df (ground-truth) without index mismatch.
     full_working_df = observable_df.copy()
 
-    observable_cols = list(observable_df.columns)
+    outcome_names = {od.name for od in config.outcome_variable_defs}
+    observable_cols = [
+        bf.name for bf in config.base_factors if bf.name not in outcome_names
+    ]
 
     # Build per-benchmark context strings injected into every LLM prompt
     task_context = config.task_context.strip()
     observable_descriptions: dict = {}
     for bf in config.base_factors:
+        if bf.name in outcome_names:
+            continue
         if bf.dtype == "categorical" and bf.levels:
             observable_descriptions[bf.name] = " | ".join(f'"{lv}"' for lv in bf.levels)
         elif bf.dtype == "continuous":
             observable_descriptions[bf.name] = "float (continuous)"
-    # outcome variable(s)
-    for od in config.outcome_variable_defs:
-        observable_descriptions[od.name] = "0 | 1" if od.type == "binary" else "continuous (float)"
 
     for round_num in range(1, disc_cfg.n_rounds + 1):
         print(f"\n{'='*60}")

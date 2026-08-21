@@ -184,7 +184,8 @@ def _gen_t9_within_trial(depends_on: List[str], lookup: dict) -> str:
         lines.append(f"        return {repr(lookup[key])}")
         first = False
     # default: most common output level
-    default_level = max(set(lookup.values()), key=list(lookup.values()).count)
+    values = list(lookup.values())
+    default_level = max(sorted(set(values)), key=values.count)
     lines.append(f"    else:")
     lines.append(f"        return {repr(default_level)}")
     return "\n".join(lines) + "\n"
@@ -209,7 +210,8 @@ def _gen_t9_window(depends_on: List[str], window_width: int, lookup: dict) -> st
         lines.append(f"    {keyword} {' and '.join(conditions)}:")
         lines.append(f"        return {repr(lookup[key])}")
         first = False
-    default_level = max(set(lookup.values()), key=list(lookup.values()).count)
+    values = list(lookup.values())
+    default_level = max(sorted(set(values)), key=values.count)
     lines.append(f"    else:")
     lines.append(f"        return {repr(default_level)}")
     return "\n".join(lines) + "\n"
@@ -617,13 +619,14 @@ class RandomSeeder(SeedingStrategy):
     Falls back to T9 random partitions when the template pool is exhausted.
     """
 
-    def __init__(self, disc_cfg, seeder_cfg) -> None:
+    def __init__(self, disc_cfg, seeder_cfg, seed: Optional[int] = None) -> None:
         self._disc_cfg = disc_cfg
         self._cfg = seeder_cfg
         self._library = FactorTemplateLibrary()
+        self._rng = random.Random(seed)
 
     def seed(self, context: SearchContext) -> List[CandidateFactor]:
-        rng = random.Random(self._disc_cfg.seed if hasattr(self._disc_cfg, "seed") else None)
+        rng = self._rng
         banned = {c.name for c in context.hard_rejected}
         scored_names = {sc.candidate.name for sc in context.all_scored_candidates}
 
@@ -687,12 +690,13 @@ class RandomLookupSeeder(SeedingStrategy):
     Discrete factors only.  Window key spaces are capped at max_table_size.
     """
 
-    def __init__(self, disc_cfg, seeder_cfg) -> None:
+    def __init__(self, disc_cfg, seeder_cfg, seed: Optional[int] = None) -> None:
         self._disc_cfg = disc_cfg
         self._cfg = seeder_cfg
+        self._rng = random.Random(seed)
 
     def seed(self, context: SearchContext) -> List[CandidateFactor]:
-        rng = random.Random(self._disc_cfg.seed if hasattr(self._disc_cfg, "seed") else None)
+        rng = self._rng
         max_depends = getattr(self._cfg, "max_depends_on", 2)
         max_output_levels = getattr(self._cfg, "max_output_levels", 2)
         max_table_size = getattr(self._cfg, "max_table_size", 64)
@@ -741,7 +745,7 @@ class RandomLookupSeeder(SeedingStrategy):
                         seq = tuple(rng.choice(all_single) for _ in range(w))
                         flat = tuple(v for step in seq for v in step)
                         keys.append(flat)
-                    keys = list(set(keys))  # deduplicate
+                    keys = list(dict.fromkeys(keys))
                 else:
                     per_step = list(itertools.product(*parent_levels))
                     keys = []
